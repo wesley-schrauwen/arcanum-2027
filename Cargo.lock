@@ -293,6 +293,9 @@ dependencies = [
 [[package]]
 name = "arcanum_formats"
 version = "0.1.0"
+dependencies = [
+ "arcanum_vfs",
+]
 
 [[package]]
 name = "arcanum_vfs"
