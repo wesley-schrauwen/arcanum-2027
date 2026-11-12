@@ -297,6 +297,9 @@ version = "0.1.0"
 [[package]]
 name = "arcanum_vfs"
 version = "0.1.0"
+dependencies = [
+ "flate2",
+]
 
 [[package]]
 name = "arrayref"

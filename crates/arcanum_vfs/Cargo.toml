@@ -2,5 +2,7 @@
 name = "arcanum_vfs"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
+flate2 = "1"
