@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use arcanum_client::{ArtAssetLoader, VfsAssetPlugin};
+use arcanum_client::{ArcanumAssetsPlugin, MesAsset, VfsAssetPlugin};
 use arcanum_vfs::Vfs;
 use bevy::asset::{AssetPlugin, LoadState};
 use bevy::image::Image;
@@ -23,7 +23,7 @@ fn app(vfs: Vfs) -> App {
         AssetPlugin::default(),
     ))
     .init_asset::<Image>()
-    .register_asset_loader(ArtAssetLoader);
+    .add_plugins(ArcanumAssetsPlugin);
     app
 }
 
@@ -86,4 +86,24 @@ fn override_folder_beats_archive() {
     let image = app.world().resource::<Assets<Image>>().get(&handle).unwrap();
     assert_eq!((image.width(), image.height()), (1, 1));
     let _ = std::fs::remove_dir_all(&over);
+}
+
+#[test]
+fn loads_main_menu_strings_from_archive() {
+    if !game_dir().join("arcanum1.dat").exists() {
+        return;
+    }
+    let mut app = app(Vfs::from_game_dir(game_dir(), None).unwrap());
+    let handle: Handle<MesAsset> = app.world().resource::<AssetServer>().load("mes/MainMenu.mes");
+    for _ in 0..2000 {
+        app.update();
+        if app.world().resource::<Assets<MesAsset>>().get(&handle).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let mes = app.world().resource::<Assets<MesAsset>>().get(&handle).expect("mes not loaded");
+    for (id, text) in [(10, "Single Player"), (11, "MultiPlayer"), (12, "Options"), (13, "Credits"), (14, "Exit Game")] {
+        assert_eq!(mes.get(id), Some(text));
+    }
 }

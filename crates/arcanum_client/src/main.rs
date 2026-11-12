@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use arcanum_client::{ArtAssetLoader, VfsAssetPlugin};
+use arcanum_client::{ArcanumAssetsPlugin, MainMenuPlugin, VfsAssetPlugin};
 use arcanum_vfs::Vfs;
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 /// Game data location. Override with `ARCANUM_DIR`; `ARCANUM_OVERRIDE` adds a loose-file folder
 /// that shadows the `.dat` archives.
@@ -16,7 +17,8 @@ fn build_vfs() -> Vfs {
 
 fn main() {
     let vfs = Arc::new(RwLock::new(build_vfs()));
-    App::new()
+    let mut app = App::new();
+    app
         // Must come before DefaultPlugins so the VFS replaces the default asset source.
         .add_plugins(VfsAssetPlugin::new(vfs))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -27,12 +29,28 @@ fn main() {
             }),
             ..default()
         }))
-        .register_asset_loader(ArtAssetLoader)
-        .add_systems(Startup, setup_scene)
-        .run();
+        .add_plugins((ArcanumAssetsPlugin, MainMenuPlugin));
+
+    // Debugging aid: `ARCANUM_SCREENSHOT=out.png` saves the window after a moment and exits.
+    if let Ok(path) = std::env::var("ARCANUM_SCREENSHOT") {
+        app.insert_resource(ScreenshotPath(path)).add_systems(Update, screenshot_and_exit);
+    }
+    app.run();
 }
 
-fn setup_scene(mut commands: Commands, assets: Res<AssetServer>) {
-    commands.spawn(Camera2d);
-    commands.spawn(Sprite::from_image(assets.load("art/interface/mainmenuback.art")));
+#[derive(Resource)]
+struct ScreenshotPath(String);
+
+fn screenshot_and_exit(
+    mut commands: Commands,
+    path: Res<ScreenshotPath>,
+    mut frame: Local<u32>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    *frame += 1;
+    if *frame == 90 {
+        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.0.clone()));
+    } else if *frame == 180 {
+        exit.write(AppExit::Success);
+    }
 }
