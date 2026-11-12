@@ -8,4 +8,7 @@ mod archive;
 mod vfs;
 
 pub use archive::{ArcanumArchive, TocEntry};
+
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
 pub use vfs::Vfs;

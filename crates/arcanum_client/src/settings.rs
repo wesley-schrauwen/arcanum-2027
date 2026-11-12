@@ -87,15 +87,20 @@ impl Default for GameSettings {
 impl GameSettings {
     /// Defaults, overridden by `ARCANUM_RES` and `ARCANUM_FULLSCREEN` when set.
     pub fn from_env() -> Self {
+        Self::from_vars(|name| std::env::var(name).ok())
+    }
+
+    /// Like [`Self::from_env`], reading variables through `var` (for tests).
+    pub fn from_vars(var: impl Fn(&str) -> Option<String>) -> Self {
         let mut settings = Self::default();
-        if let Ok(value) = std::env::var("ARCANUM_RES") {
+        if let Some(value) = var("ARCANUM_RES") {
             match value.parse() {
                 Ok(res) => settings.resolution = res,
                 Err(e) => eprintln!("ignoring ARCANUM_RES: {e}"),
             }
         }
-        if let Ok(value) = std::env::var("ARCANUM_FULLSCREEN") {
-            settings.fullscreen = matches!(value.trim(), "1" | "true" | "yes");
+        if let Some(value) = var("ARCANUM_FULLSCREEN") {
+            settings.fullscreen = matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes");
         }
         settings
     }
@@ -185,6 +190,30 @@ mod tests {
         assert!((ui_scale_for(1440.0) - 1.3333).abs() < 1e-3);
         assert!((ui_scale_for(1600.0) - 1.4815).abs() < 1e-3);
         assert_eq!(ui_scale_for(2160.0), 2.0);
+    }
+
+    #[test]
+    fn reads_overrides_from_variables() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string())
+        };
+        assert_eq!(GameSettings::from_vars(vars(&[])), GameSettings::default());
+
+        let s = GameSettings::from_vars(vars(&[("ARCANUM_RES", "3440x1440"), ("ARCANUM_FULLSCREEN", "TRUE")]));
+        assert_eq!(s.resolution, DisplayResolution::UltrawideQhd);
+        assert!(s.fullscreen);
+        assert_eq!(s.window_mode(), WindowMode::BorderlessFullscreen(MonitorSelection::Primary));
+
+        // Bad values fall back to the defaults.
+        let s = GameSettings::from_vars(vars(&[("ARCANUM_RES", "huge"), ("ARCANUM_FULLSCREEN", "nope")]));
+        assert_eq!(s, GameSettings::default());
+    }
+
+    #[test]
+    fn window_resolution_is_physical_pixels() {
+        let s = GameSettings { resolution: DisplayResolution::Qhd, fullscreen: false };
+        let r = s.window_resolution();
+        assert_eq!((r.physical_width(), r.physical_height()), (2560, 1440));
     }
 
     #[test]

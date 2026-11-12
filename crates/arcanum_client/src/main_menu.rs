@@ -33,9 +33,10 @@ const LABEL_FONT_SIZE: f32 = 26.0 * ART_SCALE;
 #[derive(Component)]
 pub struct MenuLabel(pub u32);
 
-/// The background sprite, until its image has loaded and it has been fitted to the baseline height.
+/// Marks the background sprite until its image has loaded and it has been fitted to the
+/// baseline height.
 #[derive(Component)]
-struct FitToBaseline;
+pub struct FitToBaseline;
 
 #[derive(Resource)]
 struct MenuMessages(Handle<MesAsset>);
@@ -79,9 +80,25 @@ fn fit_background(
     }
 }
 
+/// True once the labels exist and the background has been fitted (or has no image to wait for).
+pub fn menu_ready(labels: Query<(), With<MenuLabel>>, pending: Query<(), With<FitToBaseline>>) -> bool {
+    !labels.is_empty() && pending.is_empty()
+}
+
 /// Waits for `MainMenu.mes` to load, then spawns the label column as a UI hierarchy.
-fn spawn_labels(mut commands: Commands, messages: Res<MenuMessages>, mes: Res<Assets<MesAsset>>) {
-    let Some(mes) = mes.get(&messages.0) else { return };
+fn spawn_labels(
+    mut commands: Commands,
+    messages: Res<MenuMessages>,
+    mes: Res<Assets<MesAsset>>,
+    assets: Res<AssetServer>,
+) {
+    let Some(mes) = mes.get(&messages.0) else {
+        if let Some(bevy::asset::LoadState::Failed(err)) = assets.get_load_state(&messages.0) {
+            error!("cannot load {MAIN_MENU_MES}: {err}");
+            commands.remove_resource::<MenuMessages>();
+        }
+        return;
+    };
 
     commands
         .spawn(Node {

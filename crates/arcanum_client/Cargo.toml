@@ -8,3 +8,7 @@ license = "MIT"
 bevy = "0.20"
 arcanum_vfs = { path = "../arcanum_vfs" }
 arcanum_formats = { path = "../arcanum_formats" }
+[dev-dependencies]
+arcanum_vfs = { path = "../arcanum_vfs", features = ["test-util"] }
+arcanum_formats = { path = "../arcanum_formats", features = ["test-util"] }
+tempfile = "3"

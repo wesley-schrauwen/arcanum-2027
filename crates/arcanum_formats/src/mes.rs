@@ -159,6 +159,86 @@ mod tests {
     }
 
     #[test]
+    fn empty_and_comment_only_files() {
+        assert!(MesFile::parse(b"").unwrap().is_empty());
+        assert!(MesFile::parse(b"// nothing\r\n//{1}{commented out}\r\n\r\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn whitespace_and_layout_between_groups() {
+        let m = MesFile::parse(b"{ 7 }\t{seven}   {8}\n\n{eight}").unwrap();
+        assert_eq!(m.get(7), Some("seven"));
+        assert_eq!(m.get(8), Some("eight"));
+    }
+
+    #[test]
+    fn text_is_kept_verbatim() {
+        let m = MesFile::parse(b"{1}{  padded  }{2}{50% off, %d coins}{3}{a{b}").unwrap();
+        assert_eq!(m.get(1), Some("  padded  "));
+        assert_eq!(m.get(2), Some("50% off, %d coins"));
+        assert_eq!(m.get(3), Some("a{b")); // braces do not nest
+    }
+
+    #[test]
+    fn single_slash_outside_braces_is_ignored() {
+        let m = MesFile::parse(b"/ {1}{x}").unwrap();
+        assert_eq!(m.get(1), Some("x"));
+    }
+
+    #[test]
+    fn duplicate_ids_keep_the_last() {
+        let m = MesFile::parse(b"{1}{first}\n{1}{second}").unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.get(1), Some("second"));
+    }
+
+    #[test]
+    fn extra_groups_on_an_entry_are_paired_in_order() {
+        // Groups are read strictly in pairs, as the format has no entry terminator.
+        let m = MesFile::parse(b"{1}{a}{2}{b}").unwrap();
+        assert_eq!((m.get(1), m.get(2)), (Some("a"), Some("b")));
+    }
+
+    #[test]
+    fn large_ids() {
+        let m = MesFile::parse(b"{4294967295}{max}").unwrap();
+        assert_eq!(m.get(u32::MAX), Some("max"));
+        assert!(matches!(MesFile::parse(b"{4294967296}{too big}"), Err(MesError::InvalidId { .. })));
+        assert!(matches!(MesFile::parse(b"{-1}{neg}"), Err(MesError::InvalidId { .. })));
+    }
+
+    #[test]
+    fn windows_1252_table() {
+        let m = MesFile::parse(b"{1}{\x80\x85\x93\x94\x96\x97\x99}{2}{\x81\x8d\x8f\x90\x9d}{3}{\xa0\xe9\xff}").unwrap();
+        assert_eq!(m.get(1), Some("\u{20AC}\u{2026}\u{201C}\u{201D}\u{2013}\u{2014}\u{2122}"));
+        // Bytes undefined in Windows-1252 pass through as the matching C1 control.
+        assert_eq!(m.get(2), Some("\u{81}\u{8D}\u{8F}\u{90}\u{9D}"));
+        assert_eq!(m.get(3), Some("\u{A0}\u{E9}\u{FF}"));
+    }
+
+    #[test]
+    fn lone_cr_is_kept() {
+        let m = MesFile::parse(b"{1}{a\rb}").unwrap();
+        assert_eq!(m.get(1), Some("a\rb"));
+    }
+
+    #[test]
+    fn error_lines_count_newlines_inside_text() {
+        assert!(matches!(
+            MesFile::parse(b"{1}{line one\nline two\nline three}\n{oops}{x}"),
+            Err(MesError::InvalidId { line: 4, .. })
+        ));
+        assert_eq!(MesFile::parse(b"\n\n{1}{a}\n{2}"), Err(MesError::MissingText { line: 4 }));
+        assert_eq!(MesFile::parse(b"{1}{a}\n\n{2}{unterminated\n"), Err(MesError::UnterminatedBrace { line: 3 }));
+    }
+
+    #[test]
+    fn errors_display_line_numbers() {
+        let e = MesFile::parse(b"\n{x}{y}").unwrap_err();
+        assert_eq!(e.to_string(), "line 2: invalid message id \"x\"");
+    }
+
+    #[test]
     fn errors() {
         assert_eq!(MesFile::parse(b"{1}{abc"), Err(MesError::UnterminatedBrace { line: 1 }));
         assert!(matches!(MesFile::parse(b"\n{x}{y}"), Err(MesError::InvalidId { line: 2, .. })));
