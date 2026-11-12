@@ -6,7 +6,10 @@ use arcanum_formats::mes::MesFile;
 use arcanum_vfs::ArcanumArchive;
 
 fn archives() -> Vec<ArcanumArchive> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/Arcanum");
+    // `ARCANUM_DIR`, or `assets/Arcanum` at the workspace root.
+    let dir = std::env::var_os("ARCANUM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/Arcanum"));
     let Ok(rd) = std::fs::read_dir(dir) else { return vec![] };
     let mut paths: Vec<_> = rd
         .flatten()

@@ -394,16 +394,18 @@ mod tests {
         }
     }
 
-    const DAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/Arcanum/arcanum1.dat");
-
     #[test]
     fn real_archive_reads_every_file() {
-        let path = Path::new(DAT);
+        // `ARCANUM_DIR`, or `assets/Arcanum` at the workspace root.
+        let dir = std::env::var_os("ARCANUM_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/Arcanum"));
+        let path = dir.join("arcanum1.dat");
         if !path.exists() {
-            eprintln!("skipping: {DAT} not found");
+            eprintln!("skipping: {} not found", path.display());
             return;
         }
-        let archive = ArcanumArchive::open(path).unwrap();
+        let archive = ArcanumArchive::open(&path).unwrap();
         let files: Vec<_> = archive.entries().iter().filter(|e| !e.is_dir()).cloned().collect();
         assert!(!files.is_empty());
         for e in &files {

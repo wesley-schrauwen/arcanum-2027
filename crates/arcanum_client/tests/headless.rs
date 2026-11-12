@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use arcanum_client::main_menu::{MENU_ENTRY_IDS, MenuLabel, menu_ready};
+use arcanum_client::resource_pack::paths;
 use arcanum_client::settings::BASELINE_HEIGHT;
 use arcanum_client::{
     ArcanumAssetsPlugin, DisplayPlugin, DisplayResolution, GameSettings, MainMenuPlugin, MesAsset,
@@ -56,11 +57,12 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Stored with `\` separators, as in the real archives; looked up via `paths::*`.
     fn new() -> Self {
         Self::with_archive(
             DatBuilder::new()
-                .zlib("art\\interface\\mainmenuback.art", &menu_art())
-                .raw("mes\\MainMenu.mes", MENU_MES),
+                .zlib(&paths::backgrounds::MAIN_MENU.replace('/', "\\"), &menu_art())
+                .raw(&paths::text::MAIN_MENU.replace('/', "\\"), MENU_MES),
         )
     }
 
@@ -142,8 +144,8 @@ fn reader_serves_archive_and_override_files() {
     fx.override_file("Mes/Extra.mes", b"{1}{loose}");
     let r = reader(&fx);
 
-    assert_eq!(read_all(&r, "mes/MainMenu.mes").unwrap(), MENU_MES);
-    assert_eq!(read_all(&r, "art/interface/mainmenuback.art").unwrap(), menu_art());
+    assert_eq!(read_all(&r, paths::text::MAIN_MENU).unwrap(), MENU_MES);
+    assert_eq!(read_all(&r, paths::backgrounds::MAIN_MENU).unwrap(), menu_art());
     assert_eq!(read_all(&r, "mes/extra.mes").unwrap(), b"{1}{loose}");
 }
 
@@ -161,7 +163,7 @@ fn reader_reports_missing_files_as_not_found() {
 #[test]
 fn reader_has_no_meta_files() {
     let r = reader(&Fixture::new());
-    let result = block_on(async { r.read_meta(Path::new("mes/MainMenu.mes")).await.map(|_| ()) });
+    let result = block_on(async { r.read_meta(Path::new(paths::text::MAIN_MENU)).await.map(|_| ()) });
     assert!(matches!(result, Err(AssetReaderError::NotFound(_))));
 }
 
@@ -173,14 +175,14 @@ fn reader_directories() {
 
     assert!(block_on(r.is_directory(Path::new("art/interface"))).unwrap());
     assert!(block_on(r.is_directory(Path::new(""))).unwrap());
-    assert!(!block_on(r.is_directory(Path::new("mes/MainMenu.mes"))).unwrap());
+    assert!(!block_on(r.is_directory(Path::new(paths::text::MAIN_MENU))).unwrap());
     assert!(!block_on(r.is_directory(Path::new("missing"))).unwrap());
 
     let listed: Vec<_> = block_on(async {
         r.read_directory(Path::new("art/interface")).await.unwrap().collect::<Vec<_>>().await
     });
     let listed: Vec<String> = listed.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-    assert_eq!(listed, ["art/interface/extra.art", "art/interface/mainmenuback.art"]);
+    assert_eq!(listed, ["art/interface/extra.art", paths::backgrounds::MAIN_MENU]);
 
     let missing = block_on(async { r.read_directory(Path::new("missing")).await.map(|_| ()) });
     assert!(matches!(missing, Err(AssetReaderError::NotFound(_))));
@@ -192,7 +194,7 @@ fn reader_directories() {
 #[test]
 fn art_loads_as_an_rgba_image() {
     let mut app = asset_app(Fixture::new().vfs());
-    let (handle, state) = load::<Image>(&mut app, "art/interface/mainmenuback.art");
+    let (handle, state) = load::<Image>(&mut app, paths::backgrounds::MAIN_MENU);
     assert!(matches!(state, LoadState::Loaded));
 
     let image = app.world().resource::<Assets<Image>>().get(&handle).unwrap();
@@ -225,9 +227,9 @@ fn mes_loads_as_an_asset() {
 #[test]
 fn override_folder_beats_archive_for_assets() {
     let fx = Fixture::new();
-    fx.override_file("mes/MainMenu.mes", b"{10}{Overridden}");
+    fx.override_file(paths::text::MAIN_MENU, b"{10}{Overridden}");
     let mut app = asset_app(fx.vfs());
-    let (handle, _) = load::<MesAsset>(&mut app, "mes/MainMenu.mes");
+    let (handle, _) = load::<MesAsset>(&mut app, paths::text::MAIN_MENU);
     assert_eq!(app.world().resource::<Assets<MesAsset>>().get(&handle).unwrap().get(10), Some("Overridden"));
 }
 
@@ -327,8 +329,8 @@ fn main_menu_labels_spawn_once() {
 fn main_menu_skips_missing_messages() {
     let fx = Fixture::with_archive(
         DatBuilder::new()
-            .raw("art/interface/mainmenuback.art", &menu_art())
-            .raw("mes/MainMenu.mes", b"{10}{Play}{14}{Quit}"),
+            .raw(paths::backgrounds::MAIN_MENU, &menu_art())
+            .raw(paths::text::MAIN_MENU, b"{10}{Play}{14}{Quit}"),
     );
     let mut app = menu_app(fx.vfs());
     run_until_menu_ready(&mut app);
@@ -337,7 +339,7 @@ fn main_menu_skips_missing_messages() {
 
 #[test]
 fn main_menu_survives_missing_strings() {
-    let fx = Fixture::with_archive(DatBuilder::new().raw("art/interface/mainmenuback.art", &menu_art()));
+    let fx = Fixture::with_archive(DatBuilder::new().raw(paths::backgrounds::MAIN_MENU, &menu_art()));
     let mut app = menu_app(fx.vfs());
     // The background still loads and is fitted; no labels appear and nothing panics.
     update_until(&mut app, |app| {
@@ -352,7 +354,7 @@ fn main_menu_survives_missing_strings() {
 
 #[test]
 fn main_menu_survives_missing_background() {
-    let fx = Fixture::with_archive(DatBuilder::new().raw("mes/MainMenu.mes", MENU_MES));
+    let fx = Fixture::with_archive(DatBuilder::new().raw(paths::text::MAIN_MENU, MENU_MES));
     let mut app = menu_app(fx.vfs());
     update_until(&mut app, |app| !label_order(app).is_empty());
     assert_eq!(label_order(&mut app).len(), 5);
@@ -385,6 +387,7 @@ fn settings(resolution: DisplayResolution, fullscreen: bool) -> GameSettings {
 #[test]
 fn ui_scale_follows_window_height() {
     for (res, scale) in [
+        (DisplayResolution::Hd, 720.0 / 1080.0),
         (DisplayResolution::HdPlus, 900.0 / 1080.0),
         (DisplayResolution::Fhd, 1.0),
         (DisplayResolution::Qhd, 1440.0 / 1080.0),
@@ -431,6 +434,19 @@ fn changing_settings_resizes_hidpi_windows_in_physical_pixels() {
     assert_eq!(w.resolution.physical_size(), UVec2::new(2560, 1440));
     assert_eq!(w.resolution.height(), 720.0);
     assert!((ui_scale(&app) - 720.0 / 1080.0).abs() < 1e-4);
+}
+
+#[test]
+fn unsupported_resolutions_are_not_applied() {
+    let s = settings(DisplayResolution::Fhd, false);
+    let mut app = display_app(s.clone(), s.window_resolution());
+    // `Custom` can be built directly, bypassing validation; the window must not follow it.
+    for bad in [DisplayResolution::Custom(800, 600), DisplayResolution::Custom(1280, 1024), DisplayResolution::Custom(9000, 5000)] {
+        app.world_mut().resource_mut::<GameSettings>().resolution = bad;
+        app.update();
+        assert_eq!(window(&mut app).resolution.physical_size(), UVec2::new(1920, 1080), "{bad:?}");
+        assert_eq!(ui_scale(&app), 1.0);
+    }
 }
 
 #[test]
