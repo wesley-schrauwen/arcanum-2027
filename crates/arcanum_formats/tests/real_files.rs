@@ -19,7 +19,7 @@ fn archives() -> Vec<ArcanumArchive> {
 
 #[test]
 fn main_menu_parses() {
-    for mut a in archives() {
+    for a in archives() {
         if let Ok(data) = a.read("mes/MainMenu.mes") {
             let mes = MesFile::parse(&data).unwrap();
             assert_eq!(mes.get(1), Some("Loading Arcanum..."));
@@ -33,7 +33,7 @@ fn main_menu_parses() {
 #[test]
 fn every_mes_file_parses() {
     let mut count = 0;
-    for mut a in archives() {
+    for a in archives() {
         let paths: Vec<String> = a
             .entries()
             .iter()
@@ -52,7 +52,7 @@ fn every_mes_file_parses() {
 #[test]
 fn art_sprites_decode() {
     let mut checked = 0;
-    for mut a in archives() {
+    for a in archives() {
         if let Ok(data) = a.read("art/interface/mainmenuback.art") {
             let art = ArtFile::parse(&data).unwrap();
             let (rgba, dims) = art.decode_frame0().unwrap();
