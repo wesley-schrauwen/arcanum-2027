@@ -3,6 +3,7 @@
 pub mod art_loader;
 pub mod main_menu;
 pub mod mes_loader;
+pub mod settings;
 pub mod vfs_asset;
 
 use bevy::prelude::*;
@@ -10,6 +11,7 @@ use bevy::prelude::*;
 pub use art_loader::ArtAssetLoader;
 pub use main_menu::MainMenuPlugin;
 pub use mes_loader::{MesAsset, MesAssetLoader};
+pub use settings::{DisplayPlugin, DisplayResolution, GameSettings};
 pub use vfs_asset::{SharedVfs, VfsAssetPlugin, VfsAssetReader};
 
 /// Registers the `.art` and `.mes` asset loaders. Add after `DefaultPlugins`.
