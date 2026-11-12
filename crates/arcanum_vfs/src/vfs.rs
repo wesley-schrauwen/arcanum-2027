@@ -35,19 +35,26 @@ fn components(path: &str) -> Option<Vec<String>> {
 }
 
 /// Resolve `parts` under `root`, matching each component case-insensitively.
+///
+/// Names come from the directory listing, never from `parts`, so the result has the on-disk
+/// spelling even on case-insensitive filesystems. An exact match beats a case-insensitive one.
 fn resolve(root: &Path, parts: &[String]) -> Option<PathBuf> {
     let mut cur = root.to_path_buf();
     for part in parts {
-        let exact = cur.join(part);
-        if exact.exists() {
-            cur = exact;
-            continue;
+        let mut fallback = None;
+        let mut exact = None;
+        for entry in fs::read_dir(&cur).ok()?.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == part.as_str() {
+                exact = Some(entry.path());
+                break;
+            }
+            if fallback.is_none() && name.eq_ignore_ascii_case(part) {
+                fallback = Some(entry.path());
+            }
         }
-        let found = fs::read_dir(&cur)
-            .ok()?
-            .flatten()
-            .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(part))?;
-        cur = found.path();
+        cur = exact.or(fallback)?;
     }
     Some(cur)
 }
@@ -142,9 +149,14 @@ impl Vfs {
                 Layer::Dir(root) => {
                     let Some(p) = resolve(root, &parts).filter(|p| p.is_dir()) else { continue };
                     found = true;
-                    for e in fs::read_dir(p).into_iter().flatten().flatten() {
+                    // Use the on-disk spelling of the directory, not the caller's.
+                    let on_disk = p
+                        .strip_prefix(root)
+                        .map(|r| r.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
+                        .unwrap_or_else(|_| dir.clone());
+                    for e in fs::read_dir(&p).into_iter().flatten().flatten() {
                         let name = e.file_name().to_string_lossy().into_owned();
-                        let child = if dir.is_empty() { name } else { format!("{dir}/{name}") };
+                        let child = if on_disk.is_empty() { name } else { format!("{on_disk}/{name}") };
                         merged.entry(normalize(&child)).or_insert(child);
                     }
                 }
@@ -164,69 +176,144 @@ impl Vfs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::DatBuilder;
 
-    fn game_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/Arcanum")
-    }
-
-    fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("arcanum_vfs_{name}_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn write(root: &Path, rel: &str, data: &[u8]) {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, data).unwrap();
     }
 
     #[test]
-    fn dir_layer_is_case_insensitive_and_confined() {
-        let root = scratch("dir");
-        fs::create_dir_all(root.join("Art/Interface")).unwrap();
-        fs::write(root.join("Art/Interface/Foo.art"), b"hi").unwrap();
-        fs::write(root.parent().unwrap().join("arcanum_vfs_secret.txt"), b"no").unwrap();
+    fn dir_layer_is_case_insensitive() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "Art/Interface/Foo.art", b"hi");
+        let mut vfs = Vfs::new();
+        vfs.mount_dir(tmp.path());
 
+        assert_eq!(vfs.read("art\\interface\\FOO.ART").unwrap(), b"hi");
+        assert!(vfs.exists("ART/INTERFACE/foo.art"));
+        assert!(vfs.is_dir("art"));
+        assert!(vfs.is_dir(""));
+        assert!(!vfs.exists("art")); // directories are not files
+        assert_eq!(vfs.list_dir("art/interface").unwrap(), vec!["Art/Interface/Foo.art"]);
+    }
+
+    #[test]
+    fn paths_cannot_escape_a_mounted_dir() {
+        let outer = tempfile::tempdir().unwrap();
+        let root = outer.path().join("root");
+        write(&root, "inside.txt", b"ok");
+        write(outer.path(), "secret.txt", b"no");
         let mut vfs = Vfs::new();
         vfs.mount_dir(&root);
-        assert_eq!(vfs.read("art\\interface\\FOO.ART").unwrap(), b"hi");
-        assert!(vfs.is_dir("ART"));
-        let listed = vfs.list_dir("art/interface").unwrap();
-        assert_eq!(listed.len(), 1);
-        assert!(listed[0].eq_ignore_ascii_case("art/interface/foo.art"));
-        assert!(vfs.read("../arcanum_vfs_secret.txt").is_err());
-        assert!(vfs.read("art/../../arcanum_vfs_secret.txt").is_err());
-        assert!(!vfs.exists("/etc/passwd"));
-        assert!(vfs.read("missing.art").is_err());
-        let _ = fs::remove_file(root.parent().unwrap().join("arcanum_vfs_secret.txt"));
-    }
 
-    #[test]
-    fn override_dir_shadows_archives() {
-        let game = game_dir();
-        if !game.join("arcanum1.dat").exists() {
-            return;
+        assert_eq!(vfs.read("inside.txt").unwrap(), b"ok");
+        for bad in ["../secret.txt", "..\\secret.txt", "a/../../secret.txt", "./../secret.txt", "C:/secret.txt", "x\0y"] {
+            assert_eq!(vfs.read(bad).unwrap_err().kind(), io::ErrorKind::NotFound, "{bad:?}");
+            assert!(!vfs.exists(bad));
+            assert!(!vfs.is_dir(bad));
+            assert!(vfs.list_dir(bad).is_none());
         }
-        let over = scratch("override");
-        fs::create_dir_all(over.join("mes")).unwrap();
-        fs::write(over.join("mes/MainMenu.mes"), b"{1}{Overridden}").unwrap();
-
-        let vfs = Vfs::from_game_dir(&game, Some(&over)).unwrap();
-        assert_eq!(vfs.read("mes/mainmenu.mes").unwrap(), b"{1}{Overridden}");
-
-        let plain = Vfs::from_game_dir(&game, None).unwrap();
-        assert!(plain.read("mes/mainmenu.mes").unwrap().len() > 1000);
+        // Leading separators are relative to the mount, not the filesystem root.
+        assert_eq!(vfs.read("/inside.txt").unwrap(), b"ok");
+        assert!(!vfs.exists("/etc/passwd"));
     }
 
     #[test]
-    fn archives_layer_with_patch_priority() {
+    fn first_mounted_layer_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tmp.path().join("first.dat");
+        let second = tmp.path().join("second.dat");
+        DatBuilder::new().raw("a.txt", b"first").write(&first);
+        DatBuilder::new().raw("A.TXT", b"second").raw("b.txt", b"only second").write(&second);
+        let over = tmp.path().join("override");
+        write(&over, "b.txt", b"override");
+
+        let mut vfs = Vfs::new();
+        vfs.mount_dir(&over);
+        vfs.mount_archive(&first).unwrap();
+        vfs.mount_archive(&second).unwrap();
+        assert_eq!(vfs.read("a.txt").unwrap(), b"first");
+        assert_eq!(vfs.read("b.txt").unwrap(), b"override");
+        assert!(vfs.read("c.txt").is_err());
+    }
+
+    #[test]
+    fn archive_directory_entries_are_not_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dat = tmp.path().join("a.dat");
+        DatBuilder::new().dir("art").raw("art/x.art", b"x").write(&dat);
+        let mut vfs = Vfs::new();
+        vfs.mount_archive(&dat).unwrap();
+        assert_eq!(vfs.read("art").unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(!vfs.exists("art"));
+        assert!(vfs.is_dir("art"));
+    }
+
+    #[test]
+    fn list_dir_merges_layers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dat = tmp.path().join("a.dat");
+        DatBuilder::new().raw("mes/A.mes", b"").raw("mes/b.mes", b"").raw("other/c", b"").write(&dat);
+        let over = tmp.path().join("override");
+        write(&over, "mes/a.MES", b"");
+        write(&over, "mes/new.mes", b"");
+
+        let mut vfs = Vfs::new();
+        vfs.mount_dir(&over);
+        vfs.mount_archive(&dat).unwrap();
+
+        // Sorted by normalised path, de-duplicated, stored spelling kept (first layer wins).
+        assert_eq!(vfs.list_dir("MES").unwrap(), vec!["mes/a.MES", "mes/b.mes", "mes/new.mes"]);
+        assert_eq!(vfs.list_dir("").unwrap(), vec!["mes", "other"]);
+        assert_eq!(vfs.list_dir("other").unwrap(), vec!["other/c"]);
+        assert!(vfs.list_dir("missing").is_none());
+    }
+
+    #[test]
+    fn from_game_dir_orders_patches_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        DatBuilder::new().raw("x.mes", b"base").raw("base_only", b"1").write(tmp.path().join("arcanum1.dat"));
+        DatBuilder::new().raw("x.mes", b"mid").write(tmp.path().join("arcanum3.dat"));
+        DatBuilder::new().raw("X.MES", b"patch").write(tmp.path().join("Arcanum4.dat"));
+        fs::write(tmp.path().join("readme.txt"), b"not an archive").unwrap();
+
+        let vfs = Vfs::from_game_dir(tmp.path(), None).unwrap();
+        assert_eq!(vfs.read("x.mes").unwrap(), b"patch");
+        assert_eq!(vfs.read("base_only").unwrap(), b"1");
+        assert!(!vfs.exists("readme.txt"));
+
+        let over = tmp.path().join("override");
+        write(&over, "x.mes", b"override");
+        let vfs = Vfs::from_game_dir(tmp.path(), Some(&over)).unwrap();
+        assert_eq!(vfs.read("x.mes").unwrap(), b"override");
+    }
+
+    #[test]
+    fn from_game_dir_reports_bad_archives() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("broken.dat"), [0u8; 64]).unwrap();
+        assert!(Vfs::from_game_dir(tmp.path(), None).is_err());
+        assert!(Vfs::from_game_dir(tmp.path().join("missing"), None).is_err());
+    }
+
+    /// `ARCANUM_DIR`, or `assets/Arcanum` at the workspace root.
+    fn game_dir() -> PathBuf {
+        std::env::var_os("ARCANUM_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/Arcanum"))
+    }
+
+    #[test]
+    fn real_game_dir_patch_priority() {
         let game = game_dir();
         if !game.join("arcanum1.dat").exists() {
             return;
         }
         let vfs = Vfs::from_game_dir(&game, None).unwrap();
-        // Present in both arcanum3.dat (13561 bytes) and the Arcanum4.dat patch (13560 bytes).
+        // In both arcanum3.dat (13561 bytes) and the Arcanum4.dat patch (13560 bytes).
         assert_eq!(vfs.read("mes/item_effect.mes").unwrap().len(), 13560);
-        // Only in arcanum1.dat.
         assert!(vfs.exists("art/interface/mainmenuback.art"));
-        assert!(vfs.is_dir("art/interface"));
-        assert!(vfs.list_dir("art/interface").unwrap().iter().any(|p| p.eq_ignore_ascii_case("art/interface/mainmenuback.art")));
-        assert!(vfs.list_dir("no/such/dir").is_none());
     }
 }

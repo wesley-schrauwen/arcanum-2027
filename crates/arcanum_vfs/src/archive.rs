@@ -210,8 +210,11 @@ impl ArcanumArchive {
         read_exact_at(&self.file, &mut raw, entry.offset as u64)?;
 
         let data = if entry.is_compressed() {
-            let mut out = Vec::with_capacity(entry.uncompressed_size as usize);
-            ZlibDecoder::new(raw.as_slice()).read_to_end(&mut out)?;
+            // Stop one byte past the declared size: enough to detect a mismatch without
+            // letting a corrupt or hostile entry inflate without bound.
+            let limit = entry.uncompressed_size as u64 + 1;
+            let mut out = Vec::new();
+            ZlibDecoder::new(raw.as_slice()).take(limit).read_to_end(&mut out)?;
             out
         } else if entry.flags & FLAG_RAW != 0 || entry.flags == 0 {
             raw
@@ -238,46 +241,177 @@ impl ArcanumArchive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::DatBuilder;
 
-    const DAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/Arcanum/arcanum1.dat");
+    fn open(builder: &DatBuilder) -> io::Result<ArcanumArchive> {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        builder.write(file.path());
+        ArcanumArchive::open(file.path())
+    }
+
+    fn open_bytes(bytes: &[u8]) -> io::Result<ArcanumArchive> {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+        ArcanumArchive::open(file.path())
+    }
+
+    fn sample() -> DatBuilder {
+        DatBuilder::new()
+            .dir("art")
+            .raw("art\\Interface\\Button.ART", b"raw bytes")
+            .zlib("mes\\MainMenu.mes", &b"{1}{Hello}".repeat(50))
+            .dir("empty")
+    }
 
     #[test]
-    fn reads_every_file() {
-        let path = Path::new(DAT);
+    fn reads_raw_and_zlib_entries() {
+        let a = open(&sample()).unwrap();
+        assert_eq!(a.entries().len(), 4);
+        assert_eq!(a.read("art/interface/button.art").unwrap(), b"raw bytes");
+        assert_eq!(a.read("MES\\MAINMENU.MES").unwrap(), b"{1}{Hello}".repeat(50));
+        assert!(a.find("mes/MainMenu.mes").unwrap().is_compressed());
+    }
+
+    #[test]
+    fn lookup_is_case_and_separator_insensitive() {
+        let a = open(&sample()).unwrap();
+        for p in ["art/interface/button.art", "ART\\INTERFACE\\BUTTON.ART", "/art/Interface/Button.ART/"] {
+            assert!(a.find(p).is_some(), "{p}");
+        }
+        assert!(a.find("art/interface").is_none());
+    }
+
+    #[test]
+    fn missing_file_is_not_found() {
+        let a = open(&sample()).unwrap();
+        assert_eq!(a.read("nope.art").unwrap_err().kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn directories_explicit_and_implied() {
+        let a = open(&sample()).unwrap();
+        assert!(a.is_dir(""));
+        assert!(a.is_dir("art"));
+        assert!(a.is_dir("ART/interface")); // implied by a file path, no dir entry
+        assert!(a.is_dir("empty")); // explicit entry, no children
+        assert!(a.is_dir("mes"));
+        assert!(!a.is_dir("art/interface/button.art"));
+        assert!(!a.is_dir("nope"));
+
+        assert_eq!(a.list_dir("").unwrap(), vec!["art", "empty", "mes"]);
+        assert_eq!(a.list_dir("art").unwrap(), vec!["art/Interface"]);
+        assert_eq!(a.list_dir("Art\\Interface").unwrap(), vec!["art/Interface/Button.ART"]);
+        assert!(a.list_dir("empty").unwrap().is_empty());
+        assert!(a.list_dir("art/interface/button.art").is_none());
+    }
+
+    #[test]
+    fn reading_a_directory_fails() {
+        let a = open(&sample()).unwrap();
+        let dir = a.find("art").unwrap().clone();
+        assert_eq!(a.read_entry(&dir).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn empty_archive() {
+        let a = open(&DatBuilder::new()).unwrap();
+        assert!(a.entries().is_empty());
+        assert_eq!(a.list_dir("").unwrap(), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn rejects_bad_footer() {
+        assert!(open_bytes(&[0; 10]).is_err());
+        assert!(open_bytes(&[0; 64]).is_err()); // no magic
+
+        let mut bytes = sample().build();
+        let n = bytes.len();
+        bytes[n - 4..].copy_from_slice(&(n as u32 + 1).to_le_bytes()); // index larger than file
+        assert!(open_bytes(&bytes).is_err());
+        bytes[n - 4..].copy_from_slice(&10u32.to_le_bytes()); // smaller than the footer
+        assert!(open_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_index() {
+        // Entry pointing past the data section.
+        let b = DatBuilder::new().entry("a", 0x1, vec![1, 2, 3], 3);
+        let mut bytes = b.build();
+        let offset_pos = bytes.len() - 28 - 4;
+        bytes[offset_pos..offset_pos + 4].copy_from_slice(&100u32.to_le_bytes());
+        assert!(open_bytes(&bytes).is_err());
+
+        // Entry count far larger than the index.
+        let mut bytes = DatBuilder::new().raw("a", b"x").build();
+        let count_pos = 1; // data is one byte, then the count
+        bytes[count_pos..count_pos + 4].copy_from_slice(&1_000_000u32.to_le_bytes());
+        assert!(open_bytes(&bytes).is_err());
+
+        // Absurd name length.
+        let mut bytes = DatBuilder::new().raw("a", b"x").build();
+        bytes[5..9].copy_from_slice(&100_000u32.to_le_bytes());
+        assert!(open_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_corrupt_entries() {
+        // Declared size smaller than the data actually inflates to (also caps the inflate).
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut enc, &[7u8; 100_000]).unwrap();
+        let bomb = enc.finish().unwrap();
+        let a = open(&DatBuilder::new().entry("bomb", 0x2, bomb, 10)).unwrap();
+        assert_eq!(a.read("bomb").unwrap_err().kind(), io::ErrorKind::InvalidData);
+
+        // Raw entry whose declared size disagrees with its stored size.
+        let a = open(&DatBuilder::new().entry("short", 0x1, vec![1, 2, 3], 4)).unwrap();
+        assert!(a.read("short").is_err());
+
+        // Not valid zlib.
+        let a = open(&DatBuilder::new().entry("junk", 0x2, vec![1, 2, 3, 4], 4)).unwrap();
+        assert!(a.read("junk").is_err());
+
+        // Unknown flags.
+        let a = open(&DatBuilder::new().entry("odd", 0x8, vec![1], 1)).unwrap();
+        assert!(a.read("odd").is_err());
+    }
+
+    #[test]
+    fn concurrent_reads_share_one_archive() {
+        let a = std::sync::Arc::new(open(&sample()).unwrap());
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let a = a.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..50 {
+                        assert_eq!(a.read("art/interface/button.art").unwrap(), b"raw bytes");
+                        assert_eq!(a.read("mes/mainmenu.mes").unwrap().len(), 500);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn real_archive_reads_every_file() {
+        // `ARCANUM_DIR`, or `assets/Arcanum` at the workspace root.
+        let dir = std::env::var_os("ARCANUM_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/Arcanum"));
+        let path = dir.join("arcanum1.dat");
         if !path.exists() {
-            eprintln!("skipping: {DAT} not found");
+            eprintln!("skipping: {} not found", path.display());
             return;
         }
-        let archive = ArcanumArchive::open(path).unwrap();
-        assert!(!archive.entries().is_empty());
+        let archive = ArcanumArchive::open(&path).unwrap();
         let files: Vec<_> = archive.entries().iter().filter(|e| !e.is_dir()).cloned().collect();
+        assert!(!files.is_empty());
         for e in &files {
             archive.read_entry(e).unwrap();
         }
-        let first = files[0].path.to_uppercase().replace('\\', "/");
-        assert!(archive.find(&first).is_some());
-    }
-
-    #[test]
-    fn lists_directories() {
-        let path = Path::new(DAT);
-        if !path.exists() {
-            return;
-        }
-        let archive = ArcanumArchive::open(path).unwrap();
         assert!(archive.is_dir("ART/Interface"));
-        assert!(!archive.is_dir("art/interface/mainmenuback.art"));
-        let root = archive.list_dir("").unwrap();
-        assert!(root.iter().any(|p| p.eq_ignore_ascii_case("art")));
-        let iface = archive.list_dir("art\\interface").unwrap();
-        assert!(iface.iter().any(|p| p.eq_ignore_ascii_case("art/interface/mainmenuback.art")));
-        assert!(archive.list_dir("nope").is_none());
-    }
-
-    #[test]
-    fn rejects_non_dat() {
-        let p = std::env::temp_dir().join("arcanum_vfs_not_a_dat.bin");
-        std::fs::write(&p, vec![0u8; 64]).unwrap();
-        assert!(ArcanumArchive::open(&p).is_err());
+        assert!(archive.list_dir("art\\interface").unwrap().iter().any(|p| p.eq_ignore_ascii_case("art/interface/mainmenuback.art")));
     }
 }

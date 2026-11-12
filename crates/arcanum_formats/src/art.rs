@@ -188,6 +188,9 @@ impl ArtFile {
 
     /// Frame 0 of rotation 0 using the first palette, as RGBA8 and `(width, height)`.
     pub fn decode_frame0(&self) -> Result<(Vec<u8>, (u32, u32)), ArtError> {
+        if self.frame_count == 0 {
+            return Err(ArtError::NoFrames);
+        }
         let f = self.decode_frame(0, 0, self.default_palette()?)?;
         Ok((f.rgba, (f.info.width, f.info.height)))
     }
@@ -254,55 +257,166 @@ fn rle_decode(src: &[u8], expected: usize) -> Result<Vec<u8>, ArtError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{ArtBuilder, TestFrame, ramp_palette, rle_encode};
 
-    /// Build a static one-frame file with a palette where entry i = [i, 0, 255 - i, 0].
-    fn build(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
-        let mut d = vec![0u8; HEADER_SIZE];
-        let put = |d: &mut Vec<u8>, off: usize, v: u32| d[off..off + 4].copy_from_slice(&v.to_le_bytes());
-        put(&mut d, 0x00, 1);
-        put(&mut d, 0x08, 8);
-        put(&mut d, 0x0c, 1);
-        put(&mut d, 0x20, 1);
-        for i in 0..256u32 {
-            d.extend_from_slice(&[i as u8, 0, 255 - i as u8, 0]);
+    /// RGBA for palette index `i` of `ramp_palette()`.
+    fn ramp_rgba(i: u8) -> [u8; 4] {
+        let [b, g, r, _] = ramp_palette()[i as usize];
+        [r, g, b, if i == 0 { 0 } else { 255 }]
+    }
+
+    fn expected_rgba(indices: &[u8]) -> Vec<u8> {
+        indices.iter().flat_map(|&i| ramp_rgba(i)).collect()
+    }
+
+    /// Deterministic pseudo-random bytes with long runs mixed in.
+    fn noisy_indices(len: usize, seed: u32) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(2_654_435_761).max(1);
+        let mut out = Vec::with_capacity(len);
+        while out.len() < len {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let run = if x % 4 == 0 { (x >> 8) as usize % 300 + 1 } else { 1 };
+            out.extend(std::iter::repeat_n((x >> 16) as u8, run.min(len - out.len())));
         }
-        for v in [width, height, pixels.len() as u32, 0, 0, 0, 0] {
-            d.extend_from_slice(&v.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn raw_frame_decodes_to_rgba() {
+        let indices = [0, 1, 2, 255, 128, 7];
+        let art = ArtFile::parse(&ArtBuilder::single(TestFrame::raw(3, 2, &indices)).build()).unwrap();
+        let (rgba, dims) = art.decode_frame0().unwrap();
+        assert_eq!(dims, (3, 2));
+        assert_eq!(rgba, expected_rgba(&indices));
+    }
+
+    #[test]
+    fn index_zero_is_transparent() {
+        let art = ArtFile::parse(&ArtBuilder::single(TestFrame::raw(2, 1, &[0, 1])).build()).unwrap();
+        let (rgba, _) = art.decode_frame0().unwrap();
+        assert_eq!(rgba[3], 0);
+        assert_eq!(rgba[7], 255);
+    }
+
+    #[test]
+    fn rle_frame_decodes_to_rgba() {
+        let indices: Vec<u8> = [vec![5; 40], vec![1, 2, 3], vec![9; 17]].concat();
+        let art = ArtFile::parse(&ArtBuilder::single(TestFrame::rle(10, 6, &indices)).build()).unwrap();
+        let (rgba, dims) = art.decode_frame0().unwrap();
+        assert_eq!(dims, (10, 6));
+        assert_eq!(rgba, expected_rgba(&indices));
+    }
+
+    #[test]
+    fn rle_round_trips() {
+        for (len, seed) in [(1, 1), (2, 2), (127, 3), (128, 4), (129, 5), (1000, 6), (20_000, 7)] {
+            let indices = noisy_indices(len, seed);
+            assert_eq!(rle_decode(&rle_encode(&indices), len).unwrap(), indices, "len {len}");
         }
-        d.extend_from_slice(pixels);
-        d
+        assert_eq!(rle_decode(&rle_encode(&[3; 1000]), 1000).unwrap(), vec![3; 1000]);
     }
 
     #[test]
-    fn raw_frame() {
-        let art = ArtFile::parse(&build(2, 2, &[0, 1, 2, 3])).unwrap();
-        let (rgba, dims) = art.decode_frame0().unwrap();
-        assert_eq!(dims, (2, 2));
-        assert_eq!(rgba.len(), 16);
-        assert_eq!(&rgba[0..4], &[255, 0, 0, 0]); // index 0: transparent
-        assert_eq!(&rgba[4..8], &[254, 0, 1, 255]); // [b,g,r] = [1,0,254] -> r=254, b=1
+    fn rle_zero_length_runs_are_accepted() {
+        // A zero-count run and a zero-count literal emit nothing.
+        assert_eq!(rle_decode(&[0, 9, 0x80, 2, 4], 2).unwrap(), vec![4, 4]);
     }
 
     #[test]
-    fn rle_frame() {
-        // 3 x index 5, literal [7, 8, 9], 3 x index 6: 9 pixels from 8 stored bytes.
-        let art = ArtFile::parse(&build(3, 3, &[3, 5, 0x83, 7, 8, 9, 3, 6])).unwrap();
-        let (rgba, dims) = art.decode_frame0().unwrap();
-        assert_eq!(dims, (3, 3));
-        assert_eq!(&rgba[0..4], &rgba[8..12]);
-        assert_eq!(&rgba[12..16], &[255 - 7, 0, 7, 255]);
-        assert_eq!(&rgba[32..36], &[255 - 6, 0, 6, 255]);
+    fn rle_errors() {
+        assert_eq!(rle_decode(&[0x83, 1, 2], 3), Err(ArtError::CorruptPixelData)); // literal overruns
+        assert_eq!(rle_decode(&[3], 3), Err(ArtError::CorruptPixelData)); // run missing its value
+        assert_eq!(rle_decode(&[3, 1], 4), Err(ArtError::CorruptPixelData)); // too short
+        assert_eq!(rle_decode(&[3, 1, 3, 1], 4), Err(ArtError::CorruptPixelData)); // too long
     }
 
     #[test]
-    fn rejects_bad_input() {
-        assert_eq!(ArtFile::parse(&[0; 10]).unwrap_err(), ArtError::Truncated);
-        let mut d = build(1, 1, &[1]);
-        d[8] = 4;
-        assert_eq!(ArtFile::parse(&d).unwrap_err(), ArtError::BadRotationCount(4));
-        let d = build(3, 3, &[3, 5, 0x83, 7, 8]); // literal run overruns
-        assert_eq!(ArtFile::parse(&d).unwrap().decode_frame0().unwrap_err(), ArtError::CorruptPixelData);
-        let d = build(4, 4, &[3, 5]); // decodes to 3 pixels, 16 expected
-        assert_eq!(ArtFile::parse(&d).unwrap().decode_frame0().unwrap_err(), ArtError::CorruptPixelData);
+    fn animated_art_indexes_rotations_and_frames() {
+        // Each frame is filled with a distinct index and has distinct offsets.
+        let builder = ArtBuilder::animated(3, |r, f| {
+            let v = (r * 10 + f + 1) as u8;
+            let frame = if f % 2 == 0 { TestFrame::raw(4, 2, &[v; 8]) } else { TestFrame::rle(4, 2, &[v; 8]) };
+            frame.with_offsets((r as i32, -(f as i32)), (-1, 2))
+        });
+        let art = ArtFile::parse(&builder.build()).unwrap();
+        assert_eq!((art.rotation_count, art.frame_count), (8, 3));
+        assert_eq!(art.frame_rate, 10);
+        for r in 0..8 {
+            for f in 0..3 {
+                let frame = art.decode_frame(r, f, 0).unwrap();
+                let v = (r * 10 + f + 1) as u8;
+                assert_eq!(frame.rgba, expected_rgba(&[v; 8]), "rotation {r} frame {f}");
+                assert_eq!((frame.info.center_x, frame.info.center_y), (r as i32, -(f as i32)));
+                assert_eq!((frame.info.delta_x, frame.info.delta_y), (-1, 2));
+            }
+        }
+        assert_eq!(art.decode_frame(8, 0, 0).unwrap_err(), ArtError::FrameOutOfRange { rotation: 8, frame: 0 });
+        assert_eq!(art.decode_frame(0, 3, 0).unwrap_err(), ArtError::FrameOutOfRange { rotation: 0, frame: 3 });
+    }
+
+    #[test]
+    fn static_flag_stores_one_rotation() {
+        let art = ArtFile::parse(&ArtBuilder::single(TestFrame::raw(1, 1, &[1])).build()).unwrap();
+        assert_eq!(art.rotation_count, 1);
+        assert_eq!(art.decode_frame(1, 0, 0).unwrap_err(), ArtError::FrameOutOfRange { rotation: 1, frame: 0 });
+    }
+
+    #[test]
+    fn palette_selection() {
+        let mut b = ArtBuilder::single(TestFrame::raw(1, 1, &[1]));
+        let red: Vec<[u8; 4]> = vec![[0, 0, 255, 0]; 256];
+        b.palettes = [None, None, Some(ramp_palette()), Some(red)];
+        let art = ArtFile::parse(&b.build()).unwrap();
+        assert_eq!(art.default_palette(), Ok(2));
+        assert_eq!(art.decode_frame0().unwrap().0, ramp_rgba(1));
+        assert_eq!(art.decode_frame(0, 0, 3).unwrap().rgba, vec![255, 0, 0, 255]);
+        assert_eq!(art.decode_frame(0, 0, 0).unwrap_err(), ArtError::BadPaletteIndex(0));
+        assert_eq!(art.decode_frame(0, 0, 9).unwrap_err(), ArtError::BadPaletteIndex(9));
+
+        b.palettes = [None, None, None, None];
+        let art = ArtFile::parse(&b.build()).unwrap();
+        assert_eq!(art.decode_frame0().unwrap_err(), ArtError::NoPalette);
+    }
+
+    #[test]
+    fn empty_and_zero_sized_frames() {
+        let mut b = ArtBuilder::single(TestFrame::raw(1, 1, &[1]));
+        b.rotations = vec![vec![]];
+        let art = ArtFile::parse(&b.build()).unwrap();
+        assert_eq!(art.decode_frame0().unwrap_err(), ArtError::NoFrames);
+
+        let art = ArtFile::parse(&ArtBuilder::single(TestFrame::raw(0, 0, &[])).build()).unwrap();
+        assert_eq!(art.decode_frame0().unwrap(), (vec![], (0, 0)));
+    }
+
+    #[test]
+    fn rejects_malformed_headers() {
+        let good = ArtBuilder::single(TestFrame::raw(2, 2, &[1, 2, 3, 4])).build();
+        assert_eq!(ArtFile::parse(&good[..10]).unwrap_err(), ArtError::Truncated);
+        assert_eq!(ArtFile::parse(&good[..HEADER_SIZE + 100]).unwrap_err(), ArtError::Truncated); // in palette
+        assert_eq!(ArtFile::parse(&good[..HEADER_SIZE + PALETTE_BYTES + 10]).unwrap_err(), ArtError::Truncated); // in table
+        assert_eq!(ArtFile::parse(&good[..good.len() - 1]).unwrap_err(), ArtError::Truncated); // in pixels
+
+        let mut bad = good.clone();
+        bad[8] = 4;
+        assert_eq!(ArtFile::parse(&bad).unwrap_err(), ArtError::BadRotationCount(4));
+
+        let mut huge = good.clone();
+        huge[0x20..0x24].copy_from_slice(&u32::MAX.to_le_bytes()); // frame count
+        assert_eq!(ArtFile::parse(&huge).unwrap_err(), ArtError::Truncated);
+    }
+
+    #[test]
+    fn rejects_oversized_frames() {
+        let art = ArtFile::parse(&ArtBuilder::single(TestFrame::stored(9000, 1, vec![2, 1])).build()).unwrap();
+        assert_eq!(art.decode_frame0().unwrap_err(), ArtError::FrameTooLarge { width: 9000, height: 1 });
+    }
+
+    #[test]
+    fn corrupt_pixels_are_errors_not_panics() {
+        let art = ArtFile::parse(&ArtBuilder::single(TestFrame::stored(3, 3, vec![0x85, 1, 2])).build()).unwrap();
+        assert_eq!(art.decode_frame0().unwrap_err(), ArtError::CorruptPixelData);
     }
 }

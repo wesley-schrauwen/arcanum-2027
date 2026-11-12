@@ -9,10 +9,8 @@ use bevy::prelude::*;
 use bevy::text::FontSize;
 
 use crate::mes_loader::MesAsset;
+use crate::resource_pack::paths::{backgrounds, text};
 use crate::settings::BASELINE_HEIGHT;
-
-pub const BACKGROUND_ART: &str = "art/interface/mainmenuback.art";
-pub const MAIN_MENU_MES: &str = "mes/MainMenu.mes";
 
 /// Message ids in `MainMenu.mes` for the main menu entries, top to bottom:
 /// Single Player, MultiPlayer, Options, Credits, Exit Game.
@@ -33,9 +31,10 @@ const LABEL_FONT_SIZE: f32 = 26.0 * ART_SCALE;
 #[derive(Component)]
 pub struct MenuLabel(pub u32);
 
-/// The background sprite, until its image has loaded and it has been fitted to the baseline height.
+/// Marks the background sprite until its image has loaded and it has been fitted to the
+/// baseline height.
 #[derive(Component)]
-struct FitToBaseline;
+pub struct FitToBaseline;
 
 #[derive(Resource)]
 struct MenuMessages(Handle<MesAsset>);
@@ -62,8 +61,8 @@ fn setup_menu(mut commands: Commands, assets: Res<AssetServer>) {
             ..OrthographicProjection::default_2d()
         }),
     ));
-    commands.spawn((Sprite::from_image(assets.load(BACKGROUND_ART)), FitToBaseline));
-    commands.insert_resource(MenuMessages(assets.load(MAIN_MENU_MES)));
+    commands.spawn((Sprite::from_image(assets.load(backgrounds::MAIN_MENU)), FitToBaseline));
+    commands.insert_resource(MenuMessages(assets.load(text::MAIN_MENU)));
 }
 
 /// Scales the background so its height is the baseline height, preserving its aspect ratio.
@@ -79,9 +78,25 @@ fn fit_background(
     }
 }
 
+/// True once the labels exist and the background has been fitted (or has no image to wait for).
+pub fn menu_ready(labels: Query<(), With<MenuLabel>>, pending: Query<(), With<FitToBaseline>>) -> bool {
+    !labels.is_empty() && pending.is_empty()
+}
+
 /// Waits for `MainMenu.mes` to load, then spawns the label column as a UI hierarchy.
-fn spawn_labels(mut commands: Commands, messages: Res<MenuMessages>, mes: Res<Assets<MesAsset>>) {
-    let Some(mes) = mes.get(&messages.0) else { return };
+fn spawn_labels(
+    mut commands: Commands,
+    messages: Res<MenuMessages>,
+    mes: Res<Assets<MesAsset>>,
+    assets: Res<AssetServer>,
+) {
+    let Some(mes) = mes.get(&messages.0) else {
+        if let Some(bevy::asset::LoadState::Failed(err)) = assets.get_load_state(&messages.0) {
+            error!("cannot load {}: {err}", text::MAIN_MENU);
+            commands.remove_resource::<MenuMessages>();
+        }
+        return;
+    };
 
     commands
         .spawn(Node {
@@ -97,7 +112,7 @@ fn spawn_labels(mut commands: Commands, messages: Res<MenuMessages>, mes: Res<As
         .with_children(|column| {
             for id in MENU_ENTRY_IDS {
                 let Some(text) = mes.get(id) else {
-                    warn!("{MAIN_MENU_MES} has no message {id}");
+                    warn!("{} has no message {id}", text::MAIN_MENU);
                     continue;
                 };
                 column
