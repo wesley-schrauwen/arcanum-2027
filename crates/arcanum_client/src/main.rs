@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use arcanum_client::{ArcanumAssetsPlugin, MainMenuPlugin, VfsAssetPlugin};
+use arcanum_client::{ArcanumAssetsPlugin, DisplayPlugin, GameSettings, MainMenuPlugin, VfsAssetPlugin};
 use arcanum_vfs::Vfs;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -17,19 +17,21 @@ fn build_vfs() -> Vfs {
 
 fn main() {
     let vfs = Arc::new(RwLock::new(build_vfs()));
+    let settings = GameSettings::from_env();
     let mut app = App::new();
-    app
+    app.insert_resource(settings.clone())
         // Must come before DefaultPlugins so the VFS replaces the default asset source.
         .add_plugins(VfsAssetPlugin::new(vfs))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Arcanum Reimplementation (Bevy)".into(),
-                resolution: (1280, 720).into(),
+                resolution: settings.window_resolution(),
+                mode: settings.window_mode(),
                 ..default()
             }),
             ..default()
         }))
-        .add_plugins((ArcanumAssetsPlugin, MainMenuPlugin));
+        .add_plugins((ArcanumAssetsPlugin, DisplayPlugin, MainMenuPlugin));
 
     // Debugging aid: `ARCANUM_SCREENSHOT=out.png` saves the window after a moment and exits.
     if let Ok(path) = std::env::var("ARCANUM_SCREENSHOT") {
