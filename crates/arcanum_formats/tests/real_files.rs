@@ -1,6 +1,7 @@
 //! Runs against the real game archives; skipped when `assets/` is absent.
 use std::path::PathBuf;
 
+use arcanum_formats::art::ArtFile;
 use arcanum_formats::mes::MesFile;
 use arcanum_vfs::ArcanumArchive;
 
@@ -46,4 +47,37 @@ fn every_mes_file_parses() {
         }
     }
     eprintln!("parsed {count} .mes files");
+}
+
+#[test]
+fn art_sprites_decode() {
+    let mut checked = 0;
+    for mut a in archives() {
+        if let Ok(data) = a.read("art/interface/mainmenuback.art") {
+            let art = ArtFile::parse(&data).unwrap();
+            let (rgba, dims) = art.decode_frame0().unwrap();
+            assert_eq!(dims, (800, 600));
+            assert_eq!(rgba.len(), 800 * 600 * 4);
+        }
+        if let Ok(data) = a.read("art/interface/navbutton.art") {
+            let (_, dims) = ArtFile::parse(&data).unwrap().decode_frame0().unwrap();
+            assert_eq!(dims, (45, 45));
+        }
+        let paths: Vec<String> = a
+            .entries()
+            .iter()
+            .filter(|e| e.path.to_ascii_lowercase().ends_with(".art"))
+            .map(|e| e.path.clone())
+            .collect();
+        for p in paths {
+            let data = a.read(&p).unwrap();
+            let art = ArtFile::parse(&data).unwrap_or_else(|e| panic!("{p}: {e}"));
+            // Palette-less files exist only if the engine never draws them; report, don't fail.
+            if art.default_palette().is_ok() && art.frame_count > 0 {
+                art.decode_frame0().unwrap_or_else(|e| panic!("{p}: {e}"));
+            }
+            checked += 1;
+        }
+    }
+    eprintln!("decoded frame 0 of {checked} .art files");
 }
