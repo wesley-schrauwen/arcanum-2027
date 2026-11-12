@@ -1,0 +1,17 @@
+[package]
+name = "arcanum-2027"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[workspace]
+members = [
+    "crates/arcanum_vfs",
+    "crates/arcanum_formats",
+    "crates/arcanum_client",
+]
+resolver = "2"
+
+[workspace.dependencies]
+bevy = "0.20"
