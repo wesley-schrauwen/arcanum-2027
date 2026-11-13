@@ -10,8 +10,16 @@ player hosts.
 player in game; it is a simple toggle. The leader makes the party-wide choices, such as the
 party stance each turn cycle.
 
-Client presentation is optimistic: animations, movement and effects start at once. The host is
-authoritative over all state and every consequence.
+**Joining** happens only while the host is checked into an inn or at a campfire and sleeping.
+Inns and campfires are where players save, join and broadcast sessions; development builds lift
+the restriction. Characters belong to a session and are saved by the host; a player can reset
+theirs at any time.
+
+**Trust is hybrid**, for snappy responses (see [World milestone](world_milestone.md)): out of
+combat a client moves its own PC at once and the host validates; any client may start combat; in
+combat the client computes only AP cost and legality, and the host is authoritative over every
+result. Shared things (items, containers, doors, NPCs, dialogue, flags) are always
+host-confirmed.
 
 ## 1. Tether and spatial co-location
 
@@ -45,8 +53,9 @@ party are treated differently by the same NPC.
 
 ## 3. Shared combat bubble
 
-When combat starts, every party member inside the engagement radius joins it immediately. No one
-is left free to act outside the fight while others are locked in it.
+Any client can start combat, by aggro or by choice. Every party member inside the engagement
+radius joins it immediately. Members outside the radius stay free, so players are not forced to
+adventure together.
 
 - **`CombatEncounter`:** active combat is a host-side entity or resource. It holds:
   - the participants: party members in the radius and aggroed hostiles;
@@ -56,20 +65,22 @@ is left free to act outside the fight while others are locked in it.
   real-time/turn-based mode switch.
 - **Joining mid-combat:** a party member who was outside the radius and walks in during the
   fight is added to the bottom of the turn order on the next round. The encounter does not
-  reset.
+  reset. Outside the radius, movement is free and real-time even while the fight runs in turns;
+  this is a co-op game, so running in quickly is fine.
 - **Party stance:** the party leader chooses the party stance at the start of each turn cycle
   (see [Combat design](combat_design.md)).
 
 ## 4. Optimistic presentation, host ledger reconciliation
 
-**The client predicts immediately:**
-- **Movement:** it starts walking along the A* path the moment the player clicks. It corrects
-  gently if the host reports an obstacle or a tether clamp.
+**The client acts immediately:**
+- **Movement:** out of combat, it walks its own PC along the A* path the moment the player
+  clicks and reports the move; the host validates it and corrects gently on an obstacle or a
+  tether clamp. In combat, it checks only AP cost and legality before animating.
 - **Visual effects:** attack windups, spellcasting animations, muzzle flashes and projectile
   travel.
 
 **These wait for the host:**
-- Hit and miss rolls and critical failures.
+- Hit and miss rolls and critical failures; final AP spent.
 - HP and Fatigue changes.
 - Status effects, loot generation and death.
 
@@ -103,5 +114,6 @@ Three boundaries keep the transport swappable, for example to Steamworks later:
 
 ## Related
 
+- [World milestone](world_milestone.md): the first networked world and its trust model.
 - [Combat design](combat_design.md): turn-based companion AI and the per-cycle party stance.
 - [Companions](companions.md): follower management.
