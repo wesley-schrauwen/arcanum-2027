@@ -38,6 +38,15 @@ pub mod paths {
         pub const DIR: &str = "art/interface";
         /// Interface art id -> file name.
         pub const INDEX: &str = "art/interface/interface.mes";
+        /// Options screen background, 800x600: tab box, title plate, 2x4 grid of setting slots.
+        pub const OPTIONS_BACK: &str = "art/interface/OptionsMenuBack.ART";
+        /// Setting slot with a slider tube, 213x56.
+        pub const OPTION_SLIDER: &str = "art/interface/OptionSlider.ART";
+        /// Setting slot with a value window, 213x56.
+        pub const OPTION_CHOICE: &str = "art/interface/OptionMultiChoice.ART";
+        /// Left/right arrow buttons for setting slots, 29x30. Frames: normal, pressed, hover.
+        pub const ARROW_LEFT: &str = "art/interface/SldrButt_L_Arrow.ART";
+        pub const ARROW_RIGHT: &str = "art/interface/SldrButt_R_Arrow.ART";
     }
 
     /// Character portraits (`.bmp`).
@@ -92,8 +101,14 @@ pub mod paths {
     /// Message (`.mes`) files with UI and game text.
     pub mod text {
         pub const DIR: &str = "mes";
-        /// Main menu strings; ids 10 to 14 are the main menu entries.
+        /// Main menu strings; ids 10 to 14 are the main menu entries, 4000 to 4003 the Options
+        /// screen's Game, Video, Sound and Done buttons.
         pub const MAIN_MENU: &str = "mes/MainMenu.mes";
+        /// Options setting names (100s Game, 200s Video, 300s Sound).
+        pub const OPTIONS_UI: &str = "mes/options_ui.mes";
+        /// Option values: Off/On; floating text modes.
+        pub const OPTIONS_OFF_ON: &str = "mes/OptionsOffOn.mes";
+        pub const OPTIONS_FLOATS: &str = "mes/OptionsFloats.mes";
     }
 
     /// Sound effects (`.wav`) and music (`.mp3`, loose files in the module folder).
@@ -119,6 +134,14 @@ pub mod paths {
         items::GROUND_INDEX,
         scenery::INDEX,
         text::MAIN_MENU,
+        text::OPTIONS_UI,
+        text::OPTIONS_OFF_ON,
+        text::OPTIONS_FLOATS,
+        interface::OPTIONS_BACK,
+        interface::OPTION_SLIDER,
+        interface::OPTION_CHOICE,
+        interface::ARROW_LEFT,
+        interface::ARROW_RIGHT,
         sound::MAIN_MENU_MUSIC,
         sound::MENU_HOVER,
         sound::MENU_CLICK,

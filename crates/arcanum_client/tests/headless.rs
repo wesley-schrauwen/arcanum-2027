@@ -11,11 +11,16 @@ use arcanum_client::fonts::{ArcanumFonts, ORIGINAL_SCALE};
 use arcanum_client::main_menu::{
     HOVER_COLOR, MENU_ENTRY_IDS, MenuAction, MenuLabel, OnMainMenu, TEXT_COLOR, menu_ready,
 };
+use arcanum_client::options::{
+    CurrentTab, KEEP_RESOLUTION_TITLE, OptionId, OptionSlot, OptionValue, OptionsAction, OptionsScreen, OptionsTab, ResolutionConfirm,
+    ResolutionCountdown, ResolutionDialog, SliderFill,
+};
 use arcanum_client::screens::{PlaceholderScreen, RETURN_HINT};
+use arcanum_client::widgets::{FrameButton, Selected};
 use arcanum_client::resource_pack::paths;
 use arcanum_client::settings::BASELINE_HEIGHT;
 use arcanum_client::{
-    AppState, ArcanumAssetsPlugin, BitmapTextPlugin, DisplayPlugin, DisplayResolution, FontsPlugin, GameSettings, MainMenuPlugin,
+    AppState, ArcanumAssetsPlugin, ArtFrames, BitmapTextPlugin, DisplayPlugin, OptionsPlugin, DisplayResolution, FontsPlugin, GameSettings, MainMenuPlugin,
     MenuAudioPlugin, MesAsset, ScreensPlugin, VfsAssetPlugin, VfsAssetReader,
 };
 use arcanum_formats::font::BitmapFont;
@@ -29,6 +34,8 @@ use bevy::audio::{AudioSource, PlaybackMode, Volume};
 use bevy::camera::ScalingMode;
 use bevy::picking::hover::Hovered;
 use bevy::state::app::StatesPlugin;
+use bevy::time::{TimePlugin, TimeUpdateStrategy};
+use bevy::ui::Pressed;
 use bevy::text::FontSource;
 use bevy::ui_widgets::{Activate, ActivateOnPress, Button};
 use bevy::image::Image;
@@ -41,7 +48,7 @@ use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
 // ---------------------------------------------------------------------------------------------
 // Fixtures
 
-const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n";
+const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n{4000}{Gameplay}{4001}{Picture}{4002}{Audio}{4003}{Finished}\r\n";
 
 /// An 8x6 static sprite whose pixel at index `i` uses palette index `i % 256`.
 fn menu_art_indices() -> Vec<u8> {
@@ -271,7 +278,9 @@ fn menu_app(vfs: Vfs) -> App {
         .init_asset::<AudioSource>()
         .init_asset::<Font>()
         .init_resource::<ButtonInput<KeyCode>>()
-        .add_plugins((BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
+        .init_resource::<GameSettings>()
+        .add_plugins((TimePlugin, BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, OptionsPlugin, ScreensPlugin))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
     app
 }
 
@@ -404,7 +413,7 @@ fn ui_scale(app: &App) -> f32 {
 }
 
 fn settings(resolution: DisplayResolution, fullscreen: bool) -> GameSettings {
-    GameSettings { resolution, fullscreen }
+    GameSettings { resolution, fullscreen, ..default() }
 }
 
 #[test]
@@ -623,7 +632,6 @@ fn entries_open_their_screen_and_escape_returns() {
     let mut app = ready_menu(&Fixture::new());
     for (action, target, title) in [
         (MenuAction::SinglePlayer, AppState::SinglePlayer, "Play"),
-        (MenuAction::Options, AppState::Options, "Settings"),
         (MenuAction::Credits, AppState::Credits, "Thanks"),
     ] {
         activate(&mut app, action);
@@ -734,8 +742,8 @@ fn missing_sounds_are_skipped() {
     let world = app.world_mut();
     assert_eq!(world.query::<&AudioPlayer>().iter(world).count(), 0);
     // Buttons still work without sound.
-    activate(&mut app, MenuAction::Options);
-    assert_eq!(state(&app), AppState::Options);
+    activate(&mut app, MenuAction::Credits);
+    assert_eq!(state(&app), AppState::Credits);
 }
 
 fn label_fonts(app: &mut App) -> Vec<FontSource> {
@@ -854,7 +862,7 @@ fn hover_retints_bitmap_text() {
 #[test]
 fn placeholder_screens_use_large_and_small_bitmap_fonts() {
     let mut app = ready_menu(&fixture_with_fonts());
-    activate(&mut app, MenuAction::Options);
+    activate(&mut app, MenuAction::Credits);
     run_until_text_rendered(&mut app);
     let fonts = app.world().resource::<ArcanumFonts>().clone();
     let world = app.world_mut();
@@ -862,7 +870,7 @@ fn placeholder_screens_use_large_and_small_bitmap_fonts() {
     let children = world.get::<Children>(screen).unwrap().to_vec();
     let used: Vec<(String, Handle<BitmapFontAsset>)> =
         children.iter().map(|c| world.get::<BitmapText>(*c).map(|b| (b.text.clone(), b.font.clone())).unwrap()).collect();
-    assert_eq!(used[0], ("Settings".to_string(), fonts.large.unwrap()));
+    assert_eq!(used[0], ("Thanks".to_string(), fonts.large.unwrap()));
     assert_eq!(used[1], (RETURN_HINT.to_string(), fonts.small.unwrap()));
     let hint_node = world.get::<Node>(children[1]).unwrap();
     assert_eq!(hint_node.height, Val::Px((SMALL_LINE + 1) as f32 * ORIGINAL_SCALE));
@@ -929,4 +937,408 @@ fn art_paths_still_load_as_images_alongside_the_font_loader() {
     let (font, state) = load::<BitmapFontAsset>(&mut app, paths::backgrounds::MAIN_MENU);
     assert!(matches!(state, LoadState::Failed(_)), "the menu background is not a font");
     let _ = font;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Options screen
+
+const OPTIONS_UI_MES: &[u8] = b"{100}{Campaign}{102}{Gore Off}{104}{Autofight}{105}{Weapon Swap}{106}{Run}{107}{Helpers}\
+{200}{Gamma}{201}{Text Time}{202}{Floaties}{203}{Float Pace}{204}{Taunts}{300}{FX}{301}{Speech}{302}{Tunes}";
+
+fn options_fixture() -> Fixture {
+    let arrow = {
+        let mut b = ArtBuilder::single(TestFrame::raw(2, 2, &[1, 1, 1, 1]));
+        b.rotations[0].push(TestFrame::raw(2, 2, &[2, 2, 2, 2]));
+        b.rotations[0].push(TestFrame::raw(2, 2, &[3, 3, 3, 3]));
+        b.build()
+    };
+    let plain = ArtBuilder::single(TestFrame::raw(2, 2, &[5, 5, 5, 5])).build();
+    Fixture::with_archive(
+        DatBuilder::new()
+            .raw(paths::backgrounds::MAIN_MENU, &menu_art())
+            .raw(paths::text::MAIN_MENU, MENU_MES)
+            .raw(paths::text::OPTIONS_UI, OPTIONS_UI_MES)
+            .raw(paths::text::OPTIONS_OFF_ON, b"{0}{No}{1}{Yes}")
+            .raw(paths::text::OPTIONS_FLOATS, b"{0}{None}{1}{Some}{2}{All}")
+            .raw(paths::interface::OPTIONS_BACK, &plain)
+            .raw(paths::interface::OPTION_SLIDER, &plain)
+            .raw(paths::interface::OPTION_CHOICE, &plain)
+            .raw(paths::interface::ARROW_LEFT, &arrow)
+            .raw(paths::interface::ARROW_RIGHT, &arrow),
+    )
+}
+
+fn settings_of(app: &App) -> GameSettings {
+    app.world().resource::<GameSettings>().clone()
+}
+
+/// Opens Options from the main menu and waits for the screen to be built.
+fn open_options(fx: &Fixture) -> App {
+    let mut app = ready_menu(fx);
+    activate(&mut app, MenuAction::Options);
+    assert_eq!(state(&app), AppState::Options);
+    update_until(&mut app, |app| {
+        let world = app.world_mut();
+        world.query_filtered::<(), With<OptionSlot>>().iter(world).count() > 0
+    });
+    app
+}
+
+fn options_button(app: &mut App, action: OptionsAction) -> Entity {
+    let world = app.world_mut();
+    world.query::<(Entity, &OptionsAction)>().iter(world).find(|(_, a)| **a == action).map(|(e, _)| e).unwrap_or_else(|| panic!("no button for {action:?}"))
+}
+
+fn press(app: &mut App, action: OptionsAction) {
+    let entity = options_button(app, action);
+    app.world_mut().trigger(Activate { entity });
+    app.update();
+    app.update(); // let a tab rebuild or state change apply
+}
+
+/// Text under `entity` (itself or its descendants), in hierarchy order.
+fn texts_in(app: &mut App, entity: Entity) -> Vec<String> {
+    let world = app.world();
+    let mut out = Vec::new();
+    let mut stack = vec![entity];
+    while let Some(e) = stack.pop() {
+        if let Some(t) = world.get::<Text>(e) {
+            out.push(t.0.clone());
+        } else if let Some(b) = world.get::<BitmapText>(e) {
+            out.push(b.text.clone());
+        }
+        if let Some(children) = world.get::<Children>(e) {
+            stack.extend(children.iter().rev());
+        }
+    }
+    out
+}
+
+/// Slots in on-screen order with their text: [name, value] for choices, [name] for sliders.
+fn slots(app: &mut App) -> Vec<(OptionId, Vec<String>)> {
+    let world = app.world_mut();
+    let screen = world.query_filtered::<Entity, With<OptionsScreen>>().single(world).unwrap();
+    let children = world.get::<Children>(screen).unwrap().to_vec();
+    let slot_entities: Vec<(Entity, OptionId)> =
+        children.into_iter().filter_map(|c| world.get::<OptionSlot>(c).map(|s| (c, s.0))).collect();
+    slot_entities.into_iter().map(|(e, id)| (id, texts_in(app, e))).collect()
+}
+
+fn value_text(app: &mut App, option: OptionId) -> String {
+    let world = app.world_mut();
+    let entity = world.query::<(Entity, &OptionValue)>().iter(world).find(|(_, v)| v.0 == option).unwrap().0;
+    texts_in(app, entity).remove(0)
+}
+
+fn title(app: &mut App) -> String {
+    let world = app.world_mut();
+    let screen = world.query_filtered::<Entity, With<OptionsScreen>>().single(world).unwrap();
+    texts_in(app, screen).remove(0)
+}
+
+#[test]
+fn options_opens_on_the_game_tab_with_game_text() {
+    let mut app = open_options(&options_fixture());
+    assert_eq!(title(&mut app), "Gameplay");
+    assert_eq!(
+        slots(&mut app),
+        vec![
+            (OptionId::AutoAttack, vec!["Autofight".into(), "No".into()]),
+            (OptionId::CombatTaunts, vec!["Taunts".into(), "Yes".into()]),
+        ]
+    );
+    // Tabs and Done from MainMenu.mes; the current tab is marked.
+    for (action, label) in [
+        (OptionsAction::Tab(OptionsTab::Game), "Gameplay"),
+        (OptionsAction::Tab(OptionsTab::Video), "Picture"),
+        (OptionsAction::Tab(OptionsTab::Sound), "Audio"),
+        (OptionsAction::Done, "Finished"),
+    ] {
+        let e = options_button(&mut app, action);
+        assert_eq!(texts_in(&mut app, e), [label]);
+    }
+    let game_tab = options_button(&mut app, OptionsAction::Tab(OptionsTab::Game));
+    assert!(app.world().get::<Selected>(game_tab).is_some());
+}
+
+#[test]
+fn tabs_switch_the_settings_shown() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    assert_eq!(app.world().resource::<CurrentTab>().0, OptionsTab::Video);
+    assert_eq!(title(&mut app), "Picture");
+    let ids: Vec<OptionId> = slots(&mut app).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(ids, OptionsTab::Video.options());
+    let video = options_button(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    let game = options_button(&mut app, OptionsAction::Tab(OptionsTab::Game));
+    assert!(app.world().get::<Selected>(video).is_some());
+    assert!(app.world().get::<Selected>(game).is_none());
+    assert_eq!(value_text(&mut app, OptionId::Resolution), "1920 x 1080");
+    assert_eq!(value_text(&mut app, OptionId::Floats), "Some");
+
+    press(&mut app, OptionsAction::Tab(OptionsTab::Sound));
+    assert_eq!(
+        slots(&mut app),
+        vec![
+            (OptionId::Effects, vec!["FX".into()]),
+            (OptionId::Voice, vec!["Speech".into()]),
+            (OptionId::Music, vec!["Tunes".into()]),
+        ]
+    );
+}
+
+#[test]
+fn removed_settings_are_not_offered() {
+    let mut app = open_options(&options_fixture());
+    for tab in OptionsTab::ALL {
+        press(&mut app, OptionsAction::Tab(tab));
+        let texts: Vec<String> = slots(&mut app).into_iter().flat_map(|(_, t)| t).collect();
+        // Difficulty and combat mode were never offered; Module ("Campaign"), Violence Filter
+        // ("Gore Off"), Follower Skills ("Helpers"), Auto Switch Weapons ("Weapon Swap") and
+        // Always Run ("Run") were removed, and Control Followers with them.
+        for removed in ["Difficulty", "Combat Mode", "Campaign", "Gore Off", "Helpers", "Weapon Swap", "Run", "Control Followers"] {
+            assert!(!texts.iter().any(|t| t.contains(removed)), "{tab:?}: {texts:?}");
+        }
+    }
+}
+
+#[test]
+fn arrows_commit_changes_immediately() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Step { option: OptionId::AutoAttack, delta: 1 });
+    assert!(settings_of(&app).auto_attack);
+    assert_eq!(value_text(&mut app, OptionId::AutoAttack), "Yes");
+
+    press(&mut app, OptionsAction::Step { option: OptionId::CombatTaunts, delta: -1 });
+    assert!(!settings_of(&app).combat_taunts);
+    assert_eq!(value_text(&mut app, OptionId::CombatTaunts), "No");
+
+    press(&mut app, OptionsAction::Tab(OptionsTab::Sound));
+    let fill_width = |app: &mut App| {
+        let world = app.world_mut();
+        world.query::<(&SliderFill, &Node)>().iter(world).find(|(f, _)| f.0 == OptionId::Music).map(|(_, n)| n.width).unwrap()
+    };
+    let full = fill_width(&mut app);
+    press(&mut app, OptionsAction::Step { option: OptionId::Music, delta: -1 });
+    assert_eq!(settings_of(&app).music_volume, 0.9);
+    let (Val::Px(full), Val::Px(less)) = (full, fill_width(&mut app)) else { panic!("pixel widths") };
+    assert!((less / full - 0.9).abs() < 1e-4, "fill tracks the value: {less} of {full}");
+
+    // Changes survive leaving the screen.
+    press(&mut app, OptionsAction::Done);
+    assert_eq!(state(&app), AppState::MainMenu);
+    let s = settings_of(&app);
+    assert!(s.auto_attack);
+    assert_eq!(s.music_volume, 0.9);
+}
+
+#[test]
+fn escape_leaves_options_keeping_changes() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Step { option: OptionId::AutoAttack, delta: 1 });
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::MainMenu);
+    assert!(settings_of(&app).auto_attack);
+    let world = app.world_mut();
+    assert_eq!(world.query_filtered::<(), With<OptionsScreen>>().iter(world).count(), 0);
+}
+
+#[test]
+fn options_reopen_on_the_game_tab() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Tab(OptionsTab::Sound));
+    press(&mut app, OptionsAction::Done);
+    activate(&mut app, MenuAction::Options);
+    app.update();
+    assert_eq!(title(&mut app), "Gameplay");
+}
+
+fn dialog_count(app: &mut App) -> usize {
+    let world = app.world_mut();
+    world.query_filtered::<(), With<ResolutionDialog>>().iter(world).count()
+}
+
+/// Picks the next resolution with the arrow and presses Done.
+fn change_resolution(app: &mut App) {
+    press(app, OptionsAction::Tab(OptionsTab::Video));
+    press(app, OptionsAction::Step { option: OptionId::Resolution, delta: 1 });
+    press(app, OptionsAction::Done);
+}
+
+#[test]
+fn resolution_arrows_only_pick_until_done() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    press(&mut app, OptionsAction::Step { option: OptionId::Resolution, delta: 1 });
+    press(&mut app, OptionsAction::Step { option: OptionId::Resolution, delta: 1 });
+    assert_eq!(value_text(&mut app, OptionId::Resolution), "2560 x 1600", "the slot shows the choice");
+    assert_eq!(settings_of(&app).resolution, DisplayResolution::Fhd, "but nothing is applied");
+    assert_eq!(dialog_count(&mut app), 0);
+    // Choices survive switching tabs.
+    press(&mut app, OptionsAction::Tab(OptionsTab::Game));
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    assert_eq!(value_text(&mut app, OptionId::Resolution), "2560 x 1600");
+}
+
+#[test]
+fn there_is_no_update_button() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    let world = app.world_mut();
+    let labels: Vec<Entity> = world.query_filtered::<Entity, With<OptionsAction>>().iter(world).collect();
+    for e in labels {
+        assert!(!texts_in(&mut app, e).iter().any(|t| t == "Update"));
+    }
+}
+
+#[test]
+fn done_without_a_new_resolution_leaves_at_once() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    // Away and back to the current resolution: nothing to confirm.
+    press(&mut app, OptionsAction::Step { option: OptionId::Resolution, delta: 1 });
+    press(&mut app, OptionsAction::Step { option: OptionId::Resolution, delta: -1 });
+    press(&mut app, OptionsAction::Done);
+    assert_eq!(dialog_count(&mut app), 0);
+    assert_eq!(state(&app), AppState::MainMenu);
+}
+
+#[test]
+fn done_applies_the_resolution_and_asks_before_leaving() {
+    let mut app = open_options(&options_fixture());
+    change_resolution(&mut app);
+    assert_eq!(settings_of(&app).resolution, DisplayResolution::Qhd, "applied straight away");
+    assert_eq!(dialog_count(&mut app), 1);
+    assert_eq!(state(&app), AppState::Options, "still on Options until answered");
+    assert_eq!(app.world().resource::<ResolutionConfirm>().previous, DisplayResolution::Fhd);
+    let world = app.world_mut();
+    let title = world.query_filtered::<Entity, With<ResolutionDialog>>().single(world).unwrap();
+    let texts = texts_in(&mut app, title);
+    assert!(texts.iter().any(|t| t == KEEP_RESOLUTION_TITLE), "{texts:?}");
+    assert_eq!(KEEP_RESOLUTION_TITLE, "Confirm Resolution");
+
+    press(&mut app, OptionsAction::KeepResolution);
+    assert_eq!(settings_of(&app).resolution, DisplayResolution::Qhd);
+    assert_eq!(dialog_count(&mut app), 0);
+    assert!(app.world().get_resource::<ResolutionConfirm>().is_none());
+    assert_eq!(state(&app), AppState::MainMenu);
+}
+
+#[test]
+fn revert_restores_the_previous_resolution_and_leaves() {
+    let mut app = open_options(&options_fixture());
+    change_resolution(&mut app);
+    press(&mut app, OptionsAction::RevertResolution);
+    assert_eq!(settings_of(&app).resolution, DisplayResolution::Fhd);
+    assert_eq!(dialog_count(&mut app), 0);
+    assert_eq!(state(&app), AppState::MainMenu);
+    // The discarded pick is gone next time.
+    activate(&mut app, MenuAction::Options);
+    app.update();
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    assert_eq!(value_text(&mut app, OptionId::Resolution), "1920 x 1080");
+}
+
+#[test]
+fn the_screen_is_locked_while_confirming() {
+    let mut app = open_options(&options_fixture());
+    change_resolution(&mut app);
+    press(&mut app, OptionsAction::Step { option: OptionId::Brightness, delta: 1 });
+    press(&mut app, OptionsAction::Tab(OptionsTab::Sound));
+    assert_eq!(settings_of(&app).brightness, 0.5);
+    assert_eq!(app.world().resource::<CurrentTab>().0, OptionsTab::Video);
+    assert_eq!(dialog_count(&mut app), 1);
+}
+
+#[test]
+fn unconfirmed_resolution_reverts_after_fifteen_seconds() {
+    let mut app = open_options(&options_fixture());
+    change_resolution(&mut app);
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(1)));
+    let countdown = |app: &mut App| {
+        let world = app.world_mut();
+        let e = world.query_filtered::<Entity, With<ResolutionCountdown>>().single(world).unwrap();
+        texts_in(app, e).remove(0)
+    };
+    for _ in 0..10 {
+        app.update();
+    }
+    assert_eq!(settings_of(&app).resolution, DisplayResolution::Qhd, "still waiting after 10 s");
+    assert_eq!(countdown(&mut app), "Reverting in 5 seconds");
+    for _ in 0..6 {
+        app.update();
+    }
+    assert_eq!(settings_of(&app).resolution, DisplayResolution::Fhd);
+    assert_eq!(dialog_count(&mut app), 0);
+    assert_eq!(state(&app), AppState::MainMenu);
+}
+
+#[test]
+fn escape_confirms_like_done_and_reverts_in_the_dialog() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    press(&mut app, OptionsAction::Step { option: OptionId::Resolution, delta: 1 });
+    press_escape(&mut app);
+    assert_eq!(dialog_count(&mut app), 1, "Escape asks too");
+    assert_eq!(state(&app), AppState::Options);
+    press_escape(&mut app);
+    assert_eq!(settings_of(&app).resolution, DisplayResolution::Fhd);
+    assert_eq!(dialog_count(&mut app), 0);
+    assert_eq!(state(&app), AppState::MainMenu);
+}
+
+#[test]
+fn only_resolution_asks_for_confirmation() {
+    let mut app = open_options(&options_fixture());
+    press(&mut app, OptionsAction::Tab(OptionsTab::Video));
+    press(&mut app, OptionsAction::Step { option: OptionId::Fullscreen, delta: 1 });
+    press(&mut app, OptionsAction::Step { option: OptionId::Brightness, delta: 1 });
+    assert!(settings_of(&app).fullscreen);
+    assert_eq!(settings_of(&app).brightness, 0.6);
+    assert_eq!(dialog_count(&mut app), 0);
+}
+
+#[test]
+fn arrow_buttons_show_hover_and_pressed_frames() {
+    let mut app = open_options(&options_fixture());
+    let arrow = options_button(&mut app, OptionsAction::Step { option: OptionId::AutoAttack, delta: 1 });
+    let frames_handle = app.world().get::<FrameButton>(arrow).unwrap().frames.clone();
+    update_until(&mut app, |app| app.world().resource::<Assets<ArtFrames>>().get(&frames_handle).is_some());
+    app.update();
+    let frames = app.world().resource::<Assets<ArtFrames>>().get(&frames_handle).unwrap().frames.clone();
+    let shown = |app: &App| app.world().get::<ImageNode>(arrow).unwrap().image.clone();
+    assert_eq!(shown(&app), frames[0]);
+    app.world_mut().entity_mut(arrow).insert(Hovered(true));
+    app.update();
+    assert_eq!(shown(&app), frames[2]);
+    app.world_mut().entity_mut(arrow).insert(Pressed);
+    app.update();
+    assert_eq!(shown(&app), frames[1]);
+    app.world_mut().entity_mut(arrow).remove::<Pressed>().insert(Hovered(false));
+    app.update();
+    assert_eq!(shown(&app), frames[0]);
+}
+
+#[test]
+fn option_buttons_click() {
+    let fx = options_fixture();
+    fx.override_file(paths::sound::MENU_CLICK, b"x");
+    let mut app = open_options(&fx);
+    let click = app.world().resource::<MenuSounds>().click.clone().unwrap();
+    let before = one_shots(&mut app, &click);
+    press(&mut app, OptionsAction::Step { option: OptionId::AutoAttack, delta: 1 });
+    assert_eq!(one_shots(&mut app, &click), before + 1);
+}
+
+#[test]
+fn missing_option_text_falls_back_to_english() {
+    let fx = Fixture::with_archive(
+        DatBuilder::new().raw(paths::backgrounds::MAIN_MENU, &menu_art()).raw(paths::text::MAIN_MENU, b"{10}{Play}{12}{Settings}"),
+    );
+    let mut app = open_options(&fx);
+    assert_eq!(title(&mut app), "Game");
+    let first = slots(&mut app).remove(0);
+    assert_eq!(first, (OptionId::AutoAttack, vec!["Auto Attack".into(), "Off".into()]));
+    let done = options_button(&mut app, OptionsAction::Done);
+    assert_eq!(texts_in(&mut app, done), ["Done"]);
 }

@@ -17,6 +17,7 @@ use crate::fonts::{ArcanumFonts, ORIGINAL_SCALE, UiFont};
 use crate::mes_loader::MesAsset;
 use crate::resource_pack::paths::{backgrounds, text};
 use crate::settings::BASELINE_HEIGHT;
+use crate::widgets::{HoverText, WidgetsPlugin};
 
 /// Which screen is showing.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -102,10 +103,12 @@ impl Plugin for MainMenuPlugin {
                 (
                     fit_background,
                     spawn_menu.run_if(in_state(AppState::MainMenu)).run_if(resource_exists::<PendingMenu>),
-                    highlight_hovered,
                 ),
             )
             .add_observer(on_activate);
+        if !app.is_plugin_added::<WidgetsPlugin>() {
+            app.add_plugins(WidgetsPlugin);
+        }
     }
 }
 
@@ -197,6 +200,7 @@ fn spawn_menu(
                             Button,
                             ActivateOnPress,
                             Hovered::default(),
+                            HoverText { normal: TEXT_COLOR, hover: HOVER_COLOR },
                             TextColor(TEXT_COLOR),
                         ));
                         fonts.insert_text(&mut text, label, UiFont::Large);
@@ -204,22 +208,6 @@ fn spawn_menu(
             }
         });
     commands.remove_resource::<PendingMenu>();
-}
-
-/// Brightens a menu entry while hovered and plays the hover sound when the pointer enters.
-fn highlight_hovered(
-    mut commands: Commands,
-    mut buttons: Query<(&Hovered, &mut TextColor), (Changed<Hovered>, With<MenuAction>)>,
-    sounds: Option<Res<MenuSounds>>,
-) {
-    for (hovered, mut text_color) in &mut buttons {
-        text_color.0 = if hovered.get() { HOVER_COLOR } else { TEXT_COLOR };
-        if hovered.get()
-            && let Some(sounds) = &sounds
-        {
-            sounds.play_hover(&mut commands);
-        }
-    }
 }
 
 /// Runs a menu button's action when it is pressed.

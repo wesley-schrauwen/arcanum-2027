@@ -1,4 +1,5 @@
-//! Placeholder screens for the menu destinations that are not built yet. Each shows its title
+//! Placeholder screens for the menu destinations that are not built yet (Options has its own
+//! screen in [`crate::options`]). Each shows its title
 //! (from `MainMenu.mes`) on the menu panel; Escape returns to the main menu.
 
 use bevy::prelude::*;
@@ -12,8 +13,7 @@ use crate::mes_loader::MesAsset;
 pub struct PlaceholderScreen(pub AppState);
 
 /// Placeholder screens with the `MainMenu.mes` id of their title.
-const PLACEHOLDERS: [(AppState, u32); 3] =
-    [(AppState::SinglePlayer, 10), (AppState::Options, 12), (AppState::Credits, 13)];
+const PLACEHOLDERS: [(AppState, u32); 2] = [(AppState::SinglePlayer, 10), (AppState::Credits, 13)];
 
 /// Shown under the title. Not from the game's text, so English only for now.
 pub const RETURN_HINT: &str = "Press Esc to return";
@@ -27,7 +27,11 @@ impl Plugin for ScreensPlugin {
                 spawn_placeholder(commands, state, title_id, text, mes, fonts)
             });
         }
-        app.add_systems(Update, return_to_menu.run_if(not(in_state(AppState::MainMenu))));
+        app.add_systems(
+            Update,
+            // Options handles Escape itself (it may need to revert a resolution change first).
+            return_to_menu.run_if(not(in_state(AppState::MainMenu))).run_if(not(in_state(AppState::Options))),
+        );
     }
 }
 
