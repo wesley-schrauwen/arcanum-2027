@@ -1,16 +1,22 @@
 //! Arcanum client building blocks: Bevy asset integration for the game's VFS.
 
 pub mod art_loader;
+pub mod audio;
+pub mod fonts;
 pub mod main_menu;
 pub mod mes_loader;
 pub mod resource_pack;
+pub mod screens;
 pub mod settings;
 pub mod vfs_asset;
 
 use bevy::prelude::*;
 
 pub use art_loader::ArtAssetLoader;
-pub use main_menu::MainMenuPlugin;
+pub use audio::MenuAudioPlugin;
+pub use fonts::FontsPlugin;
+pub use main_menu::{AppState, MainMenuPlugin};
+pub use screens::ScreensPlugin;
 pub use mes_loader::{MesAsset, MesAssetLoader};
 pub use resource_pack::ResourcePack;
 pub use settings::{DisplayPlugin, DisplayResolution, GameSettings};
