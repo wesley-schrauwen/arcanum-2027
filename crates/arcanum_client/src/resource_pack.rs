@@ -31,6 +31,9 @@ pub mod paths {
         pub const MAIN_MENU: &str = "art/interface/mainmenuback.art";
         /// Splash screens shown at startup (`.bmp`).
         pub const SPLASH_DIR: &str = "art/splash";
+        /// "Loading Arcanum..." pictures, 800x400 with the words painted in. The loading screen
+        /// shows one at random.
+        pub const LOADING: [&str; 3] = ["art/splash/Splash1.bmp", "art/splash/Splash2.bmp", "art/splash/Splash3.bmp"];
     }
 
     /// Interface art: buttons, windows, cursors.
@@ -45,6 +48,8 @@ pub mod paths {
         /// Setting slot with a value window, 213x56.
         pub const OPTION_CHOICE: &str = "art/interface/OptionMultiChoice.ART";
         /// Left/right arrow buttons for setting slots, 29x30. Frames: normal, pressed, hover.
+        /// Pocket watch shown while loading: 30 frames at 15 fps.
+        pub const LOAD_INDICATOR: &str = "art/interface/LoadIndicator.ART";
         pub const ARROW_LEFT: &str = "art/interface/SldrButt_L_Arrow.ART";
         pub const ARROW_RIGHT: &str = "art/interface/SldrButt_R_Arrow.ART";
     }
@@ -130,6 +135,10 @@ pub mod paths {
     /// Every file path above, for checks.
     pub const ALL_FILES: &[&str] = &[
         backgrounds::MAIN_MENU,
+        backgrounds::LOADING[0],
+        backgrounds::LOADING[1],
+        backgrounds::LOADING[2],
+        interface::LOAD_INDICATOR,
         interface::INDEX,
         portraits::INDEX,
         textures::TILE_NAMES,

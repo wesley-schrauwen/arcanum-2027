@@ -5,8 +5,9 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-# mp3 for the module music, wav for sound effects (default audio decodes only Ogg Vorbis).
-bevy = { version = "0.20", features = ["mp3", "wav"] }
+# mp3 for the module music, wav for sound effects (default audio decodes only Ogg Vorbis), bmp for
+# the loading screen pictures.
+bevy = { version = "0.20", features = ["mp3", "wav", "bmp"] }
 arcanum_vfs = { path = "../arcanum_vfs" }
 arcanum_formats = { path = "../arcanum_formats" }
 serde = { version = "1.0.229", features = ["derive"] }

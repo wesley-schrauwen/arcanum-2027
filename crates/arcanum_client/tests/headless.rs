@@ -17,6 +17,8 @@ use arcanum_client::options::{
     CurrentTab, KEEP_RESOLUTION_TITLE, OptionId, OptionSlot, OptionValue, OptionsAction, OptionsScreen, OptionsTab, ResolutionConfirm,
     ResolutionCountdown, ResolutionDialog, SliderFill,
 };
+use arcanum_client::loading::{LoadRequest, LoadingIndicator, LoadingPicture, LoadingProgress, LoadingScreen, MIN_LOADING_SECS};
+use arcanum_client::LoadingPlugin;
 use arcanum_client::screens::{PlaceholderScreen, RETURN_HINT};
 use arcanum_client::widgets::{FrameButton, Selected};
 use arcanum_client::resource_pack::paths;
@@ -282,7 +284,7 @@ fn menu_app(vfs: Vfs) -> App {
         .init_asset::<Font>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<GameSettings>()
-        .add_plugins((TimePlugin, BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, OptionsPlugin, ScreensPlugin))
+        .add_plugins((TimePlugin, BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, OptionsPlugin, ScreensPlugin, LoadingPlugin))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
     app
 }
@@ -748,18 +750,93 @@ fn cancel_and_escape_return_to_the_main_menu() {
 }
 
 #[test]
-fn new_game_opens_a_placeholder_and_escape_goes_back_one_level() {
+fn new_game_goes_through_the_loading_screen_into_the_world() {
     let mut app = open_single_player(&Fixture::new());
     activate(&mut app, MenuAction::NewGame);
-    assert_eq!(state(&app), AppState::NewGame);
+    assert_eq!(state(&app), AppState::Loading);
     assert!(buttons(&mut app).is_empty());
-    assert_eq!(texts_under::<PlaceholderScreen>(&mut app), ["Begin", RETURN_HINT]);
+    let world = app.world_mut();
+    assert_eq!(world.query::<&LoadingScreen>().iter(world).count(), 1);
+    let picture = world.query::<&LoadingPicture>().single(world).unwrap().0;
+    assert!(picture < paths::backgrounds::LOADING.len());
+    assert_eq!(world.query::<&LoadingIndicator>().iter(world).count(), 1);
+
+    // Escape cannot leave the loading screen.
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::Loading);
+
+    // Nothing to load: it stays up for the minimum time, then the world placeholder follows.
+    update_until(&mut app, |app| state(app) == AppState::InGame);
+    let world = app.world_mut();
+    assert_eq!(world.query::<&LoadingScreen>().iter(world).count(), 0, "loading screen removed");
+    assert!(world.get_resource::<LoadRequest>().is_none());
+    assert_eq!(texts_under::<PlaceholderScreen>(&mut app), ["The world goes here", RETURN_HINT]);
 
     press_escape(&mut app);
-    assert_eq!(state(&app), AppState::SinglePlayer);
-    assert_eq!(label_order(&mut app).len(), 4, "Single Player menu rebuilt");
-    press_escape(&mut app);
     assert_eq!(state(&app), AppState::MainMenu);
+    assert_eq!(label_order(&mut app).len(), 4);
+}
+
+/// Opens the loading screen with `request`, from a ready main menu.
+fn start_loading(fx: &Fixture, request: LoadRequest) -> App {
+    let mut app = ready_menu(fx);
+    app.insert_resource(request);
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Loading);
+    app.update();
+    app.update();
+    app
+}
+
+#[test]
+fn loading_waits_for_its_assets_and_the_minimum_time() {
+    let fx = Fixture::with_archive(
+        DatBuilder::new()
+            .raw(paths::backgrounds::MAIN_MENU, &menu_art())
+            .raw(paths::text::MAIN_MENU, MENU_MES)
+            .raw("art/big.art", &ArtBuilder::single(TestFrame::raw(2, 2, &[1, 1, 1, 1])).build()),
+    );
+    let mut app = ready_menu(&fx);
+    let handle: Handle<Image> = app.world().resource::<AssetServer>().load("art/big.art");
+    app.insert_resource(LoadRequest::new(AppState::Credits).with(handle.clone()));
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Loading);
+    app.update();
+    assert_eq!(state(&app), AppState::Loading);
+    update_until(&mut app, |app| app.world().resource::<LoadingProgress>().done == 1);
+    let progress = *app.world().resource::<LoadingProgress>();
+    assert_eq!((progress.total, progress.fraction()), (1, 1.0));
+    if progress.elapsed < MIN_LOADING_SECS - 0.2 {
+        assert_eq!(state(&app), AppState::Loading, "loaded, but not shown long enough yet");
+    }
+    update_until(&mut app, |app| state(app) == AppState::Credits);
+    assert!(app.world().get_resource::<LoadingProgress>().is_none());
+}
+
+#[test]
+fn a_failed_asset_does_not_block_loading() {
+    let mut app = ready_menu(&Fixture::new());
+    let missing: Handle<Image> = app.world().resource::<AssetServer>().load("art/missing.art");
+    app.insert_resource(LoadRequest::new(AppState::Credits).with(missing).min_secs(0.0));
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Loading);
+    app.update();
+    update_until(&mut app, |app| state(app) == AppState::Credits);
+}
+
+#[test]
+fn loading_without_a_request_returns_to_the_menu() {
+    let mut app = ready_menu(&Fixture::new());
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Loading);
+    app.update();
+    assert_eq!(state(&app), AppState::Loading);
+    update_until(&mut app, |app| state(app) == AppState::MainMenu);
+}
+
+#[test]
+fn a_long_minimum_keeps_the_loading_screen_up() {
+    let mut app = start_loading(&Fixture::new(), LoadRequest::new(AppState::Credits).min_secs(60.0));
+    for _ in 0..100 {
+        app.update();
+    }
+    assert_eq!(state(&app), AppState::Loading, "10 s in, 60 s minimum");
 }
 
 /// Entities playing `handle` once and despawning afterwards.
