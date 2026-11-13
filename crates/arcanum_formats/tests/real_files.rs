@@ -84,3 +84,32 @@ fn art_sprites_decode() {
     }
     eprintln!("decoded frame 0 of {checked} .art files");
 }
+
+#[test]
+fn every_bitmap_font_parses() {
+    use arcanum_formats::font::BitmapFont;
+    let mut checked = 0;
+    for a in archives() {
+        let fonts: Vec<String> = a
+            .entries()
+            .iter()
+            .filter(|e| e.path.to_ascii_lowercase().ends_with("font.art"))
+            .map(|e| e.path.clone())
+            .collect();
+        for path in fonts {
+            let font = BitmapFont::parse(&a.read(&path).unwrap()).unwrap_or_else(|e| panic!("{path}: {e}"));
+            assert!(font.line_height > 0, "{path}");
+            assert!(font.glyph('?').is_some_and(|g| g.width > 0), "{path}");
+            checked += 1;
+        }
+        // The main menu font.
+        if let Ok(data) = a.read("art/interface/Morph30Font.ART") {
+            let font = BitmapFont::parse(&data).unwrap();
+            assert_eq!(font.line_height, 33);
+            let text = font.render("Single Player");
+            assert_eq!((text.width, text.height), (font.measure("Single Player"), 33));
+            assert!(text.alpha.iter().any(|&a| a > 200), "glyphs have solid pixels");
+        }
+    }
+    eprintln!("parsed {checked} bitmap fonts");
+}

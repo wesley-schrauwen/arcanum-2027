@@ -6,7 +6,8 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use arcanum_client::audio::{MENU_MUSIC_VOLUME, MenuMusic, MenuSounds};
-use arcanum_client::fonts::ArcanumFonts;
+use arcanum_client::bitmap_text::{BitmapFontAsset, BitmapText, BitmapTextRendered, compose_rgba};
+use arcanum_client::fonts::{ArcanumFonts, ORIGINAL_SCALE};
 use arcanum_client::main_menu::{
     HOVER_COLOR, MENU_ENTRY_IDS, MenuAction, MenuLabel, OnMainMenu, TEXT_COLOR, menu_ready,
 };
@@ -14,10 +15,11 @@ use arcanum_client::screens::{PlaceholderScreen, RETURN_HINT};
 use arcanum_client::resource_pack::paths;
 use arcanum_client::settings::BASELINE_HEIGHT;
 use arcanum_client::{
-    AppState, ArcanumAssetsPlugin, DisplayPlugin, DisplayResolution, FontsPlugin, GameSettings, MainMenuPlugin,
+    AppState, ArcanumAssetsPlugin, BitmapTextPlugin, DisplayPlugin, DisplayResolution, FontsPlugin, GameSettings, MainMenuPlugin,
     MenuAudioPlugin, MesAsset, ScreensPlugin, VfsAssetPlugin, VfsAssetReader,
 };
-use arcanum_formats::test_util::{ArtBuilder, TestFrame, ramp_palette};
+use arcanum_formats::font::BitmapFont;
+use arcanum_formats::test_util::{ArtBuilder, TestFrame, font_art, ramp_palette};
 use arcanum_vfs::Vfs;
 use arcanum_vfs::test_util::DatBuilder;
 use bevy::app::TaskPoolPlugin;
@@ -269,7 +271,7 @@ fn menu_app(vfs: Vfs) -> App {
         .init_asset::<AudioSource>()
         .init_asset::<Font>()
         .init_resource::<ButtonInput<KeyCode>>()
-        .add_plugins((FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
+        .add_plugins((BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
     app
 }
 
@@ -282,9 +284,14 @@ fn run_until_menu_ready(app: &mut App) {
 /// Label ids in on-screen order, read from the UI hierarchy.
 fn label_order(app: &mut App) -> Vec<(u32, String)> {
     let world = app.world_mut();
-    let mut labels = world.query::<(Entity, &MenuLabel, &Text, &ChildOf)>();
-    let entries: Vec<(Entity, u32, String, Entity)> =
-        labels.iter(world).map(|(e, l, t, parent)| (e, l.0, t.0.clone(), parent.parent())).collect();
+    let mut labels = world.query::<(Entity, &MenuLabel, Option<&Text>, Option<&BitmapText>, &ChildOf)>();
+    let entries: Vec<(Entity, u32, String, Entity)> = labels
+        .iter(world)
+        .map(|(e, l, t, b, parent)| {
+            let text = t.map(|t| t.0.clone()).or_else(|| b.map(|b| b.text.clone())).unwrap();
+            (e, l.0, text, parent.parent())
+        })
+        .collect();
     if entries.is_empty() {
         return Vec::new();
     }
@@ -508,14 +515,19 @@ fn display_plugin_without_a_window_does_nothing() {
 // ---------------------------------------------------------------------------------------------
 // Menu interaction, screens, audio and fonts
 
-/// Menu buttons in on-screen order.
+/// Menu buttons (the text entities) in on-screen order.
 fn buttons(app: &mut App) -> Vec<(Entity, MenuAction)> {
     let world = app.world_mut();
     let Some(column) = world.query_filtered::<Entity, With<OnMainMenu>>().iter(world).next() else {
         return Vec::new();
     };
     let rows = world.get::<Children>(column).unwrap().to_vec();
-    rows.into_iter().map(|row| (row, *world.get::<MenuAction>(row).unwrap())).collect()
+    rows.into_iter()
+        .map(|row| {
+            let label = world.get::<Children>(row).unwrap()[0];
+            (label, *world.get::<MenuAction>(label).unwrap())
+        })
+        .collect()
 }
 
 fn button_for(app: &mut App, action: MenuAction) -> Entity {
@@ -523,9 +535,7 @@ fn button_for(app: &mut App, action: MenuAction) -> Entity {
 }
 
 fn label_color(app: &mut App, button: Entity) -> Color {
-    let world = app.world();
-    let label = world.get::<Children>(button).unwrap()[0];
-    world.get::<TextColor>(label).unwrap().0
+    app.world().get::<TextColor>(button).unwrap().0
 }
 
 fn state(app: &App) -> AppState {
@@ -562,6 +572,8 @@ fn texts_under<T: Component>(app: &mut App) -> Vec<String> {
         for child in world.get::<Children>(root).map(|c| c.to_vec()).unwrap_or_default() {
             if let Some(text) = world.get::<Text>(child) {
                 out.push(text.0.clone());
+            } else if let Some(text) = world.get::<BitmapText>(child) {
+                out.push(text.text.clone());
             }
         }
     }
@@ -578,6 +590,11 @@ fn menu_entries_are_buttons_in_order() {
     );
     for (button, _) in buttons(&mut app) {
         let world = app.world();
+        // The hit area is the text: the button carries the text and is not the full-width row.
+        assert!(world.get::<MenuLabel>(button).is_some());
+        assert!(world.get::<Text>(button).is_some() || world.get::<BitmapText>(button).is_some());
+        let row = world.get::<ChildOf>(button).unwrap().parent();
+        assert!(world.get::<Button>(row).is_none() && world.get::<Hovered>(row).is_none());
         assert!(world.get::<Button>(button).is_some());
         assert!(world.get::<ActivateOnPress>(button).is_some());
         assert!(world.get::<Hovered>(button).is_some());
@@ -742,4 +759,174 @@ fn without_a_font_labels_use_the_default() {
     let mut app = ready_menu(&Fixture::new());
     assert!(app.world().resource::<ArcanumFonts>().serif.is_none());
     assert!(label_fonts(&mut app).iter().all(|f| *f == FontSource::default()));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bitmap fonts
+
+const LARGE_LINE: u32 = 6;
+const SMALL_LINE: u32 = 3;
+
+fn fixture_with_fonts() -> Fixture {
+    Fixture::with_archive(
+        DatBuilder::new()
+            .zlib(paths::backgrounds::MAIN_MENU, &menu_art())
+            .raw(paths::text::MAIN_MENU, MENU_MES)
+            .raw(paths::fonts::LARGE, &font_art(LARGE_LINE))
+            .raw(paths::fonts::SMALL, &font_art(SMALL_LINE)),
+    )
+}
+
+/// Waits until every `BitmapText` has been rasterised.
+fn run_until_text_rendered(app: &mut App) {
+    update_until(app, |app| {
+        let world = app.world_mut();
+        let pending = world.query_filtered::<(), (With<BitmapText>, Without<BitmapTextRendered>)>().iter(world).count();
+        let done = world.query_filtered::<(), With<BitmapTextRendered>>().iter(world).count();
+        pending == 0 && done > 0
+    });
+}
+
+fn button_label(app: &mut App, action: MenuAction) -> Entity {
+    // The button is the text entity.
+    button_for(app, action)
+}
+
+#[test]
+fn menu_labels_use_the_game_bitmap_font() {
+    let mut app = ready_menu(&fixture_with_fonts());
+    run_until_text_rendered(&mut app);
+    let reference = BitmapFont::parse(&font_art(LARGE_LINE)).unwrap();
+
+    for (id, text) in label_order(&mut app) {
+        let world = app.world_mut();
+        let (label, bitmap) = world
+            .query::<(Entity, &MenuLabel, &BitmapText)>()
+            .iter(world)
+            .find(|(_, l, _)| l.0 == id)
+            .map(|(e, _, b)| (e, b.clone()))
+            .unwrap();
+        assert_eq!(bitmap.text, text);
+        assert_eq!(bitmap.scale, ORIGINAL_SCALE);
+        assert!(world.get::<Text>(label).is_none(), "no plain text when the bitmap font is present");
+
+        // Sized to the rendered text plus its one-pixel shadow, at the original scale.
+        assert!(bitmap.shadow);
+        let rendered = reference.render(&text);
+        let (w, h, expected) = compose_rgba(&rendered, true);
+        assert_eq!((w, h), (rendered.width + 1, LARGE_LINE + 1));
+        let node = world.get::<Node>(label).unwrap();
+        assert_eq!(node.width, Val::Px(w as f32 * ORIGINAL_SCALE));
+        assert_eq!(node.height, Val::Px(h as f32 * ORIGINAL_SCALE));
+
+        // The image is the composed text and shadow, tinted with the text colour.
+        let image_node = world.get::<ImageNode>(label).unwrap();
+        assert_eq!(image_node.color, TEXT_COLOR);
+        let image = world.resource::<Assets<Image>>().get(&image_node.image).unwrap();
+        assert_eq!((image.width(), image.height()), (w, h));
+        assert_eq!(image.data.as_deref(), Some(expected.as_slice()));
+        // The bottom row is shadow only: black, partly transparent.
+        let bottom = &expected[((h - 1) * w + 1) as usize * 4..][..4];
+        assert_eq!(&bottom[..3], [0, 0, 0]);
+        assert!(bottom[3] > 0);
+    }
+}
+
+#[test]
+fn hover_retints_bitmap_text() {
+    let mut app = ready_menu(&fixture_with_fonts());
+    run_until_text_rendered(&mut app);
+    let credits = button_for(&mut app, MenuAction::Credits);
+    let label = button_label(&mut app, MenuAction::Credits);
+    let image_before = app.world().get::<ImageNode>(label).unwrap().image.clone();
+
+    app.world_mut().entity_mut(credits).insert(Hovered(true));
+    app.update();
+    let image_node = app.world().get::<ImageNode>(label).unwrap();
+    assert_eq!(image_node.color, HOVER_COLOR);
+    assert_eq!(image_node.image, image_before, "hover only retints, it does not re-render");
+
+    app.world_mut().entity_mut(credits).insert(Hovered(false));
+    app.update();
+    assert_eq!(app.world().get::<ImageNode>(label).unwrap().color, TEXT_COLOR);
+}
+
+#[test]
+fn placeholder_screens_use_large_and_small_bitmap_fonts() {
+    let mut app = ready_menu(&fixture_with_fonts());
+    activate(&mut app, MenuAction::Options);
+    run_until_text_rendered(&mut app);
+    let fonts = app.world().resource::<ArcanumFonts>().clone();
+    let world = app.world_mut();
+    let screen = world.query_filtered::<Entity, With<PlaceholderScreen>>().single(world).unwrap();
+    let children = world.get::<Children>(screen).unwrap().to_vec();
+    let used: Vec<(String, Handle<BitmapFontAsset>)> =
+        children.iter().map(|c| world.get::<BitmapText>(*c).map(|b| (b.text.clone(), b.font.clone())).unwrap()).collect();
+    assert_eq!(used[0], ("Settings".to_string(), fonts.large.unwrap()));
+    assert_eq!(used[1], (RETURN_HINT.to_string(), fonts.small.unwrap()));
+    let hint_node = world.get::<Node>(children[1]).unwrap();
+    assert_eq!(hint_node.height, Val::Px((SMALL_LINE + 1) as f32 * ORIGINAL_SCALE));
+}
+
+#[test]
+fn override_ttf_takes_priority_over_bitmap_fonts() {
+    let fx = fixture_with_fonts();
+    fx.override_file(paths::fonts::SERIF, b"font bytes are not parsed in tests");
+    let mut app = ready_menu(&fx);
+    for _ in 0..5 {
+        app.update();
+    }
+    let world = app.world_mut();
+    assert_eq!(world.query_filtered::<(), (With<MenuLabel>, With<Text>)>().iter(world).count(), 5);
+    assert_eq!(world.query_filtered::<(), With<BitmapText>>().iter(world).count(), 0);
+}
+
+#[test]
+fn broken_bitmap_font_falls_back_to_plain_text() {
+    let fx = Fixture::with_archive(
+        DatBuilder::new()
+            .raw(paths::backgrounds::MAIN_MENU, &menu_art())
+            .raw(paths::text::MAIN_MENU, MENU_MES)
+            .raw(paths::fonts::LARGE, b"not a font")
+            .raw(paths::fonts::SMALL, &font_art(SMALL_LINE)),
+    );
+    let mut app = ready_menu(&fx);
+    update_until(&mut app, |app| {
+        let world = app.world_mut();
+        world.query_filtered::<(), (With<MenuLabel>, With<Text>)>().iter(world).count() == 5
+    });
+    let world = app.world_mut();
+    assert_eq!(world.query_filtered::<(), (With<MenuLabel>, With<BitmapText>)>().iter(world).count(), 0);
+    // The words survive the fallback.
+    assert_eq!(label_order(&mut app).iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["Play", "Online", "Settings", "Thanks", "Quit"]);
+}
+
+#[test]
+fn changing_bitmap_text_rerenders_and_empty_text_has_no_image() {
+    let mut app = ready_menu(&fixture_with_fonts());
+    run_until_text_rendered(&mut app);
+    let label = button_label(&mut app, MenuAction::Options);
+    let reference = BitmapFont::parse(&font_art(LARGE_LINE)).unwrap();
+
+    app.world_mut().get_mut::<BitmapText>(label).unwrap().text = "Longer text here".into();
+    app.update();
+    let node = app.world().get::<Node>(label).unwrap();
+    assert_eq!(node.width, Val::Px((reference.measure("Longer text here") + 1) as f32 * ORIGINAL_SCALE));
+
+    app.world_mut().get_mut::<BitmapText>(label).unwrap().text = String::new();
+    app.update();
+    assert!(app.world().get::<ImageNode>(label).is_none());
+    assert_eq!(app.world().get::<Node>(label).unwrap().width, Val::Px(0.0));
+}
+
+#[test]
+fn art_paths_still_load_as_images_alongside_the_font_loader() {
+    // Both loaders claim `.art`; the requested asset type decides.
+    let mut app = menu_app(fixture_with_fonts().vfs());
+    let (image, state) = load::<Image>(&mut app, paths::fonts::LARGE);
+    assert!(matches!(state, LoadState::Loaded));
+    assert!(app.world().resource::<Assets<Image>>().get(&image).is_some());
+    let (font, state) = load::<BitmapFontAsset>(&mut app, paths::backgrounds::MAIN_MENU);
+    assert!(matches!(state, LoadState::Failed(_)), "the menu background is not a font");
+    let _ = font;
 }

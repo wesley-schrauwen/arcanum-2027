@@ -145,3 +145,18 @@ impl ArtBuilder {
         out
     }
 }
+
+/// A synthetic bitmap font: 225 static frames `line_height` tall with a grey palette (entry `i`
+/// is grey `i`). Frame `n` is `n % 7 + 1` pixels wide, so a glyph's width identifies its frame,
+/// and row `r` of every glyph uses palette index `r * 60` (row 0 is empty).
+pub fn font_art(line_height: u32) -> Vec<u8> {
+    let frame = |n: usize| {
+        let w = (n % 7 + 1) as u32;
+        let indices: Vec<u8> = (0..line_height).flat_map(|r| std::iter::repeat_n((r * 60).min(255) as u8, w as usize)).collect();
+        TestFrame::raw(w, line_height, &indices)
+    };
+    let mut b = ArtBuilder::single(frame(0));
+    b.rotations[0].extend((1..225).map(frame));
+    b.palettes = [Some((0..=255u8).map(|i| [i, i, i, 0]).collect()), None, None, None];
+    b.build()
+}
