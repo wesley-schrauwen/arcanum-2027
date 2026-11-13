@@ -4,4 +4,11 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[features]
+# Exposes `test_util` (synthetic .art builder, RLE encoder) to other crates' tests.
+test-util = []
+
 [dependencies]
+
+[dev-dependencies]
+arcanum_vfs = { path = "../arcanum_vfs" }

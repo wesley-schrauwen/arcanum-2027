@@ -4,5 +4,12 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[features]
+# Exposes `test_util` (synthetic .dat builder) to other crates' tests.
+test-util = []
+
 [dependencies]
 flate2 = "1"
+
+[dev-dependencies]
+tempfile = "3"
