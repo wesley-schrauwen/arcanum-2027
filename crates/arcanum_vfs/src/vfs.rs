@@ -87,17 +87,24 @@ impl Vfs {
         if let Some(dir) = override_dir {
             vfs.mount_dir(dir);
         }
-        let mut dats: Vec<PathBuf> = fs::read_dir(game_dir)?
+        vfs.mount_archives_in(game_dir)?;
+        Ok(vfs)
+    }
+
+    /// Mount every `.dat` directly inside `dir`, highest file name first (so `Arcanum4.dat`
+    /// shadows `arcanum1.dat`). Subdirectories are not searched.
+    pub fn mount_archives_in(&mut self, dir: impl AsRef<Path>) -> io::Result<()> {
+        let mut dats: Vec<PathBuf> = fs::read_dir(dir)?
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dat")))
+            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dat")))
             .collect();
         dats.sort_by_key(|p| p.file_name().map(|n| n.to_ascii_lowercase()));
         dats.reverse();
         for dat in dats {
-            vfs.mount_archive(dat)?;
+            self.mount_archive(dat)?;
         }
-        Ok(vfs)
+        Ok(())
     }
 
     /// Read a whole file from the first layer that has it.

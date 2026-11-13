@@ -1,7 +1,10 @@
 use std::sync::{Arc, RwLock};
 
 use arcanum_client::main_menu::menu_ready;
-use arcanum_client::{ArcanumAssetsPlugin, DisplayPlugin, GameSettings, MainMenuPlugin, ResourcePack, VfsAssetPlugin};
+use arcanum_client::{
+    ArcanumAssetsPlugin, DisplayPlugin, FontsPlugin, GameSettings, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
+    ScreensPlugin, VfsAssetPlugin,
+};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
@@ -10,7 +13,8 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 const SCREENSHOT_VAR: &str = "DEBUG_ARCANUM_SCREENSHOT";
 
 fn main() {
-    // Game data location: `ARCANUM_DIR` (default `assets/Arcanum`) and optional `ARCANUM_OVERRIDE`.
+    // Game data: `ARCANUM_DIR` (default `assets/Arcanum`), optional `ARCANUM_OVERRIDE` and
+    // `ARCANUM_MODULE` (default `Arcanum`).
     let pack = ResourcePack::from_env();
     let vfs = pack
         .open_vfs()
@@ -24,14 +28,14 @@ fn main() {
         .add_plugins(VfsAssetPlugin::new(vfs))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Arcanum Reimplementation (Bevy)".into(),
+                title: "Open Arcanum (2026-November)".into(),
                 resolution: settings.window_resolution(),
                 mode: settings.window_mode(),
                 ..default()
             }),
             ..default()
         }))
-        .add_plugins((ArcanumAssetsPlugin, DisplayPlugin, MainMenuPlugin));
+        .add_plugins((ArcanumAssetsPlugin, DisplayPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
 
     if let Ok(path) = std::env::var(SCREENSHOT_VAR) {
         app.insert_resource(ScreenshotPath(path))

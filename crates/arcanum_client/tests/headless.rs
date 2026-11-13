@@ -5,12 +5,17 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use arcanum_client::main_menu::{MENU_ENTRY_IDS, MenuLabel, menu_ready};
+use arcanum_client::audio::{MENU_MUSIC_VOLUME, MenuMusic, MenuSounds};
+use arcanum_client::fonts::ArcanumFonts;
+use arcanum_client::main_menu::{
+    HOVER_COLOR, MENU_ENTRY_IDS, MenuAction, MenuLabel, OnMainMenu, TEXT_COLOR, menu_ready,
+};
+use arcanum_client::screens::{PlaceholderScreen, RETURN_HINT};
 use arcanum_client::resource_pack::paths;
 use arcanum_client::settings::BASELINE_HEIGHT;
 use arcanum_client::{
-    ArcanumAssetsPlugin, DisplayPlugin, DisplayResolution, GameSettings, MainMenuPlugin, MesAsset,
-    VfsAssetPlugin, VfsAssetReader,
+    AppState, ArcanumAssetsPlugin, DisplayPlugin, DisplayResolution, FontsPlugin, GameSettings, MainMenuPlugin,
+    MenuAudioPlugin, MesAsset, ScreensPlugin, VfsAssetPlugin, VfsAssetReader,
 };
 use arcanum_formats::test_util::{ArtBuilder, TestFrame, ramp_palette};
 use arcanum_vfs::Vfs;
@@ -18,7 +23,12 @@ use arcanum_vfs::test_util::DatBuilder;
 use bevy::app::TaskPoolPlugin;
 use bevy::asset::io::{AssetReader, AssetReaderError, Reader};
 use bevy::asset::{AssetPlugin, LoadState};
+use bevy::audio::{AudioSource, PlaybackMode, Volume};
 use bevy::camera::ScalingMode;
+use bevy::picking::hover::Hovered;
+use bevy::state::app::StatesPlugin;
+use bevy::text::FontSource;
+use bevy::ui_widgets::{Activate, ActivateOnPress, Button};
 use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
@@ -251,9 +261,15 @@ fn bad_assets_fail_without_panicking() {
 // ---------------------------------------------------------------------------------------------
 // Main menu
 
+/// The full menu stack minus anything needing a window, GPU or audio device: audio entities
+/// are spawned but nothing plays them.
 fn menu_app(vfs: Vfs) -> App {
     let mut app = asset_app(vfs);
-    app.add_plugins(MainMenuPlugin);
+    app.add_plugins(StatesPlugin)
+        .init_asset::<AudioSource>()
+        .init_asset::<Font>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .add_plugins((FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
     app
 }
 
@@ -487,4 +503,243 @@ fn display_plugin_without_a_window_does_nothing() {
         app.update();
     }
     assert_eq!(ui_scale(&app), 1.0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Menu interaction, screens, audio and fonts
+
+/// Menu buttons in on-screen order.
+fn buttons(app: &mut App) -> Vec<(Entity, MenuAction)> {
+    let world = app.world_mut();
+    let Some(column) = world.query_filtered::<Entity, With<OnMainMenu>>().iter(world).next() else {
+        return Vec::new();
+    };
+    let rows = world.get::<Children>(column).unwrap().to_vec();
+    rows.into_iter().map(|row| (row, *world.get::<MenuAction>(row).unwrap())).collect()
+}
+
+fn button_for(app: &mut App, action: MenuAction) -> Entity {
+    buttons(app).into_iter().find(|(_, a)| *a == action).unwrap().0
+}
+
+fn label_color(app: &mut App, button: Entity) -> Color {
+    let world = app.world();
+    let label = world.get::<Children>(button).unwrap()[0];
+    world.get::<TextColor>(label).unwrap().0
+}
+
+fn state(app: &App) -> AppState {
+    *app.world().resource::<State<AppState>>().get()
+}
+
+fn activate(app: &mut App, action: MenuAction) {
+    let entity = button_for(app, action);
+    app.world_mut().trigger(Activate { entity });
+    app.update();
+}
+
+fn press_escape(app: &mut App) {
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+    app.update();
+    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+    keys.release(KeyCode::Escape);
+    keys.clear();
+    // The state change queued by the key press applies at the start of the next frame.
+    app.update();
+}
+
+fn ready_menu(fx: &Fixture) -> App {
+    let mut app = menu_app(fx.vfs());
+    run_until_menu_ready(&mut app);
+    app
+}
+
+fn texts_under<T: Component>(app: &mut App) -> Vec<String> {
+    let world = app.world_mut();
+    let roots: Vec<Entity> = world.query_filtered::<Entity, With<T>>().iter(world).collect();
+    let mut out = Vec::new();
+    for root in roots {
+        for child in world.get::<Children>(root).map(|c| c.to_vec()).unwrap_or_default() {
+            if let Some(text) = world.get::<Text>(child) {
+                out.push(text.0.clone());
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn menu_entries_are_buttons_in_order() {
+    let mut app = ready_menu(&Fixture::new());
+    let actions: Vec<MenuAction> = buttons(&mut app).into_iter().map(|(_, a)| a).collect();
+    assert_eq!(
+        actions,
+        [MenuAction::SinglePlayer, MenuAction::MultiPlayer, MenuAction::Options, MenuAction::Credits, MenuAction::ExitGame]
+    );
+    for (button, _) in buttons(&mut app) {
+        let world = app.world();
+        assert!(world.get::<Button>(button).is_some());
+        assert!(world.get::<ActivateOnPress>(button).is_some());
+        assert!(world.get::<Hovered>(button).is_some());
+        assert_eq!(label_color(&mut app, button), TEXT_COLOR);
+    }
+}
+
+#[test]
+fn hovering_highlights_only_that_entry() {
+    let mut app = ready_menu(&Fixture::new());
+    let options = button_for(&mut app, MenuAction::Options);
+    app.world_mut().entity_mut(options).insert(Hovered(true));
+    app.update();
+    for (button, action) in buttons(&mut app) {
+        let expected = if action == MenuAction::Options { HOVER_COLOR } else { TEXT_COLOR };
+        assert_eq!(label_color(&mut app, button), expected, "{action:?}");
+    }
+
+    app.world_mut().entity_mut(options).insert(Hovered(false));
+    app.update();
+    assert_eq!(label_color(&mut app, options), TEXT_COLOR);
+}
+
+#[test]
+fn entries_open_their_screen_and_escape_returns() {
+    let mut app = ready_menu(&Fixture::new());
+    for (action, target, title) in [
+        (MenuAction::SinglePlayer, AppState::SinglePlayer, "Play"),
+        (MenuAction::Options, AppState::Options, "Settings"),
+        (MenuAction::Credits, AppState::Credits, "Thanks"),
+    ] {
+        activate(&mut app, action);
+        assert_eq!(state(&app), target);
+        // The main menu's buttons are gone; the placeholder shows its title from MainMenu.mes.
+        assert!(buttons(&mut app).is_empty(), "{action:?}");
+        assert!(label_order(&mut app).is_empty());
+        assert_eq!(texts_under::<PlaceholderScreen>(&mut app), [title, RETURN_HINT]);
+        // The background stays.
+        let world = app.world_mut();
+        assert_eq!(world.query::<&Sprite>().iter(world).count(), 1);
+
+        press_escape(&mut app);
+        assert_eq!(state(&app), AppState::MainMenu);
+        assert!(texts_under::<PlaceholderScreen>(&mut app).is_empty());
+        assert_eq!(label_order(&mut app).len(), 5, "menu rebuilt after {action:?}");
+    }
+}
+
+#[test]
+fn escape_on_the_main_menu_does_nothing() {
+    let mut app = ready_menu(&Fixture::new());
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::MainMenu);
+    assert_eq!(buttons(&mut app).len(), 5);
+}
+
+#[test]
+fn exit_game_requests_app_exit() {
+    let mut app = ready_menu(&Fixture::new());
+    assert!(app.should_exit().is_none());
+    activate(&mut app, MenuAction::ExitGame);
+    assert_eq!(app.should_exit(), Some(AppExit::Success));
+}
+
+#[test]
+fn multiplayer_stays_on_the_menu() {
+    let mut app = ready_menu(&Fixture::new());
+    activate(&mut app, MenuAction::MultiPlayer);
+    app.update();
+    assert_eq!(state(&app), AppState::MainMenu);
+    assert_eq!(buttons(&mut app).len(), 5);
+    assert!(app.should_exit().is_none());
+}
+
+/// Entities playing `handle` once and despawning afterwards.
+fn one_shots(app: &mut App, handle: &Handle<AudioSource>) -> usize {
+    let world = app.world_mut();
+    world
+        .query::<(&AudioPlayer, &PlaybackSettings)>()
+        .iter(world)
+        .filter(|(player, settings)| player.0 == *handle && matches!(settings.mode, PlaybackMode::Despawn))
+        .count()
+}
+
+fn fixture_with_sounds() -> Fixture {
+    let fx = Fixture::new();
+    for path in [paths::sound::MAIN_MENU_MUSIC, paths::sound::MENU_HOVER, paths::sound::MENU_CLICK] {
+        fx.override_file(path, b"not decoded in tests");
+    }
+    fx
+}
+
+#[test]
+fn menu_music_loops_at_half_volume() {
+    let mut app = ready_menu(&fixture_with_sounds());
+    let world = app.world_mut();
+    let music: Vec<(PlaybackMode, Volume)> = world
+        .query_filtered::<&PlaybackSettings, With<MenuMusic>>()
+        .iter(world)
+        .map(|s| (s.mode, s.volume))
+        .collect();
+    assert_eq!(music.len(), 1);
+    assert!(matches!(music[0].0, PlaybackMode::Loop));
+    assert_eq!(music[0].1, Volume::Linear(MENU_MUSIC_VOLUME));
+
+    // The music keeps playing across menu screens.
+    activate(&mut app, MenuAction::Credits);
+    let world = app.world_mut();
+    assert_eq!(world.query_filtered::<(), With<MenuMusic>>().iter(world).count(), 1);
+}
+
+#[test]
+fn hover_and_click_play_interface_sounds() {
+    let mut app = ready_menu(&fixture_with_sounds());
+    let sounds = app.world().resource::<MenuSounds>().clone();
+    let (hover, click) = (sounds.hover.unwrap(), sounds.click.unwrap());
+
+    let credits = button_for(&mut app, MenuAction::Credits);
+    app.world_mut().entity_mut(credits).insert(Hovered(true));
+    app.update();
+    assert_eq!(one_shots(&mut app, &hover), 1);
+    // Leaving does not play it again.
+    app.world_mut().entity_mut(credits).insert(Hovered(false));
+    app.update();
+    assert_eq!(one_shots(&mut app, &hover), 1);
+
+    assert_eq!(one_shots(&mut app, &click), 0);
+    activate(&mut app, MenuAction::Credits);
+    assert_eq!(one_shots(&mut app, &click), 1);
+}
+
+#[test]
+fn missing_sounds_are_skipped() {
+    let mut app = ready_menu(&Fixture::new());
+    let sounds = app.world().resource::<MenuSounds>().clone();
+    assert!(sounds.hover.is_none() && sounds.click.is_none());
+    let world = app.world_mut();
+    assert_eq!(world.query::<&AudioPlayer>().iter(world).count(), 0);
+    // Buttons still work without sound.
+    activate(&mut app, MenuAction::Options);
+    assert_eq!(state(&app), AppState::Options);
+}
+
+fn label_fonts(app: &mut App) -> Vec<FontSource> {
+    let world = app.world_mut();
+    world.query_filtered::<&TextFont, With<MenuLabel>>().iter(world).map(|f| f.font.clone()).collect()
+}
+
+#[test]
+fn override_font_is_used_for_labels() {
+    let fx = Fixture::new();
+    fx.override_file(paths::fonts::SERIF, b"font bytes are not parsed in tests");
+    let mut app = ready_menu(&fx);
+    let serif = app.world().resource::<ArcanumFonts>().serif.clone().expect("font handle");
+    let fonts = label_fonts(&mut app);
+    assert_eq!(fonts.len(), 5);
+    assert!(fonts.iter().all(|f| matches!(f, FontSource::Handle(h) if *h == serif)));
+}
+
+#[test]
+fn without_a_font_labels_use_the_default() {
+    let mut app = ready_menu(&Fixture::new());
+    assert!(app.world().resource::<ArcanumFonts>().serif.is_none());
+    assert!(label_fonts(&mut app).iter().all(|f| *f == FontSource::default()));
 }

@@ -74,7 +74,12 @@ impl DatBuilder {
         out
     }
 
+    /// Writes the archive, creating parent directories as needed.
     pub fn write(&self, path: impl AsRef<Path>) {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
         std::fs::write(path, self.build()).unwrap();
     }
 }
