@@ -10,7 +10,7 @@ use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
 use bevy::text::FontSize;
 
-use crate::bitmap_text::{BitmapFontAsset, BitmapText};
+use crate::bitmap_text::{Align, BitmapFontAsset, BitmapText};
 use crate::resource_pack::paths;
 use crate::settings::BASELINE_HEIGHT;
 use crate::vfs_asset::VfsResource;
@@ -72,9 +72,32 @@ impl ArcanumFonts {
         if self.serif.is_none()
             && let Some(bitmap) = self.bitmap(font)
         {
-            entity.insert(BitmapText { text: text.to_string(), font: bitmap.clone(), scale: ORIGINAL_SCALE, shadow: true });
+            entity.insert(BitmapText::new(text, bitmap.clone(), ORIGINAL_SCALE));
         } else {
             entity.insert((Text::new(text), self.serif(font.ttf_size())));
+        }
+    }
+
+    /// Adds a block of `text` that wraps to `width` logical pixels (and breaks at newlines, with
+    /// tab indents), like [`Self::insert_text`].
+    pub fn insert_paragraph(&self, entity: &mut EntityCommands, text: &str, font: UiFont, width: f32, align: Align) {
+        if self.serif.is_none()
+            && let Some(bitmap) = self.bitmap(font)
+        {
+            entity.insert(BitmapText::new(text, bitmap.clone(), ORIGINAL_SCALE).wrapped(width, align));
+        } else {
+            // Bevy's text wraps to the node's width by itself.
+            let justify = match align {
+                Align::Left => Justify::Left,
+                Align::Center => Justify::Center,
+            };
+            let text = arcanum_formats::font::unescape(text).replace('\t', "    ");
+            entity.insert((
+                Text::new(text),
+                self.serif(font.ttf_size()),
+                TextLayout::justify(justify),
+                Node { width: Val::Px(width), ..default() },
+            ));
         }
     }
 }

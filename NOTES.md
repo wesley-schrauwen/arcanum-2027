@@ -38,7 +38,7 @@ Options opens the original options screen (see below).
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50% × Music setting) and hover/click sounds (× Effects). Options arrows use `Button_Medium.wav` on press and `Button_Medium_Release.wav` on release, no hover sound, as in the original (confirmed in Arcanum.exe at 0x57fe60: art 667/668 with sound ids 3000/3001); text buttons keep `MorphText_CLICK.wav`. Voice volume applies to anything spawned with `play_voice`/`VoiceLine` (no voice plays yet). All live. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 193 tests, 167 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 200 tests, 174 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -88,7 +88,7 @@ crates/arcanum_client/           the Bevy game
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              78 Bevy tests, no window/GPU/game data
+  tests/headless.rs              79 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
@@ -199,13 +199,54 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 - Headless tests need `StatesPlugin`, `init_asset::<Font>()` and `init_asset::<AudioSource>()`
   (normally provided by `DefaultPlugins`); see `menu_app` in `tests/headless.rs`.
 
+## New Game picker: research and plan (in progress)
+
+Owner's decision: build it properly (option a), in three steps, each its own PR:
+1. **Multi-line `BitmapText`**: done (wrapping, real/escaped `\n`, `\t` indents, left/centre).
+   Checked in a real-game screenshot with Lugard Bloodstone's story in the description panel;
+   the full story is taller than the panel, so step 3 needs clipping or scrolling there.
+2. **Object file reader** (`arcanum_formats`): Arcanum's binary object format (`.mpc` pre-made
+   characters; the same format is used by save games and map objects). Needs the field order,
+   worked out from Arcanum.exe. Minimum for the picker: name, race, gender, background, portrait.
+3. **Fill the picker screen** (`new_game.rs`) and go on to character creation.
+
+What is known so far:
+- **Screen**: window table entry at Arcanum.exe `0x5c5270` (background art 766
+  `PreGenCharacterBase`, 4 buttons at `0x5c51b0`; init `0x545870`, button handler `0x5459f0`,
+  refresh `0x5458d0`). Buttons (13-dword records: x, y, art, ..., hover-help mes id last):
+  Next (675,55 `NextBut`, 7003), Back (69,55 `BackBut`, 7002) in the bottom bar; previous/next
+  character arrows at (43,118) and (244,118), art 283/284, no hover help. Coordinates of
+  bottom-bar buttons are bar-relative; others are screen-relative (background starts at y=41).
+- **Drawing** is shared with character creation (`0x5448e0`). Text rects (x, y, w, h; background
+  pixels): `0x5c4ec0` (339,23,409,19) one line atop the upper-right panel; `0x5c4ed0`
+  (46,183,228,19) bar 1 (name); `0x5c4ef0` (66,243,186,19) bar 2; `0x5c4f10` (66,293,186,19)
+  bar 3; `0x5c4f30` (66,343,186,19) bar 4; `0x5c5060` (95,28,64,64) portrait; `0x5c5070`
+  (350,155,395,212) the large right panel (description); `0x5c5080` (350,159,395,19) and
+  `0x5c5090` (350,185,395,182) its heading and body. Bars 2-4 call `0x4c26d0`/`0x4c2590`/
+  `0x4c2530`, which read PC fields `0x101`/`0x102` (background, background text). Exactly what
+  bars 2-4 and the top-right line show is not confirmed yet.
+- **Cycling**: current index at `0x5c5308`, count at `0x5c361c`, wraps; index 0 is "Create your
+  own character" (`CreateYourOwn.ART`, `MainMenu.mes` 650, button text 610 "Create Character").
+  The game resolves pre-mades as prototypes `16066 + index`.
+- **Data**: 12 pre-made characters in `Players/G_<guid>.mpc` (~1 KB each) with `<guid>.bmp`
+  (portrait) and `<guid>_b.bmp` (large picture). The `.mpc` contains the name (two files have
+  placeholder names "HOrcFemale"/"HElfFemale") and an auto-level scheme string. `MainMenu.mes`
+  550-562: global flag set when each is picked (550 = create your own, -1). Stories: background
+  number -> `Rules/backgrnd.mes` (pre-mades at 390-500, first line = description id 1039-1050)
+  -> `mes/gameback.mes` (title line + paragraphs with tab indents).
+- `.mpc` header seen: `8a 02 00 00` `77 00 00 00` (version 0x77), then ids and the object's GUID
+  (matches the file name), then a field bitmap and fields; sizeable arrays appear as
+  `01 04 00 00 00 <count> 00 00 00 <id> ...`.
+
 ## Known issues / backlog (not started)
 
 - Sprites use linear filtering, so scaled 800x600 art looks soft. Consider nearest or a scaler.
 - Windows narrower than 4:3 crop the menu art (they are rejected by resolution validation anyway).
 - Label positions in `main_menu.rs` are hand-tuned constants for the original art.
-- `BitmapText` is one line only: no wrapping, no alignment options, no `\n`. Characters
-  outside Windows-1252 render as `?`.
+- `BitmapText` wraps (`max_width`), breaks at real or escaped `\n`, indents leading tabs (4
+  spaces per stop) and aligns left or centre (`BitmapFont::layout`/`render_block`,
+  `ArcanumFonts::insert_paragraph`). No vertical clipping or scrolling yet: a long story overflows
+  the New Game description panel. Characters outside Windows-1252 render as `?`.
 - Bitmap text is upscaled with linear filtering (×1.8 at 1080p), so it is slightly soft.
 - Options sliders only step with the arrows (no click or drag on the tube). The bottom help box
   and the round lens (`OptionsPCLens.art`) on the options art are unused.
@@ -221,9 +262,10 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 ## Suggested next steps
 
 1. Make the remaining settings take effect once their systems exist (combat, floating text). Dialogue must play voice through `audio::play_voice`.
-2. New Game: fill the character picker (pre-made characters: portrait, info bars, description;
-   arrows cycle) and add character creation (`CreateCharacterBase`, `CreateYourOwn`). Then menu keyboard hotkeys (`MainMenu.mes` 20-24, 60-64).
-3. Multi-line `BitmapText` (wrapping, alignment) for longer UI text such as credits.
+2. New Game picker: see "New Game picker: research and plan" above (multi-line text, object
+   reader, then the screen), then character creation. Then menu keyboard hotkeys
+   (`MainMenu.mes` 20-24, 60-64).
+3. Credits screen (needs multi-line text).
 4. Art id → path mapping via the `.mes` index files, so assets can be loaded by game id.
 5. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
 6. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the
