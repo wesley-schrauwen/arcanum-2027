@@ -148,15 +148,55 @@ impl FromStr for DisplayResolution {
     }
 }
 
-#[derive(Resource, Clone, Debug, PartialEq, Eq)]
+/// How much floating text appears over characters (`mes/OptionsFloats.mes`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Floats {
+    Never,
+    #[default]
+    Minimal,
+    Verbose,
+}
+
+impl Floats {
+    pub const ALL: [Self; 3] = [Self::Never, Self::Minimal, Self::Verbose];
+}
+
+/// Everything on the Options screen. Only the display settings (resolution, fullscreen) have
+/// an effect so far; the rest are stored for systems that do not exist yet. Nothing is saved
+/// between runs. Sliders are `0.0..=1.0`.
+#[derive(Resource, Clone, Debug, PartialEq)]
 pub struct GameSettings {
     pub resolution: DisplayResolution,
     pub fullscreen: bool,
+    // Game
+    pub auto_attack: bool,
+    pub combat_taunts: bool,
+    // Video
+    pub brightness: f32,
+    pub text_duration: f32,
+    pub floats: Floats,
+    pub float_speed: f32,
+    // Sound
+    pub effects_volume: f32,
+    pub voice_volume: f32,
+    pub music_volume: f32,
 }
 
 impl Default for GameSettings {
     fn default() -> Self {
-        Self { resolution: DisplayResolution::Fhd, fullscreen: false }
+        Self {
+            resolution: DisplayResolution::Fhd,
+            fullscreen: false,
+            auto_attack: false,
+            combat_taunts: true,
+            brightness: 0.5,
+            text_duration: 0.5,
+            floats: Floats::Minimal,
+            float_speed: 0.5,
+            effects_volume: 1.0,
+            voice_volume: 1.0,
+            music_volume: 1.0,
+        }
     }
 }
 
@@ -350,7 +390,7 @@ mod tests {
 
     #[test]
     fn window_resolution_is_physical_pixels() {
-        let s = GameSettings { resolution: DisplayResolution::Qhd, fullscreen: false };
+        let s = GameSettings { resolution: DisplayResolution::Qhd, ..default() };
         let r = s.window_resolution();
         assert_eq!((r.physical_width(), r.physical_height()), (2560, 1440));
     }

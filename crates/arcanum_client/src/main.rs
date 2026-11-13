@@ -1,16 +1,20 @@
 use std::sync::{Arc, RwLock};
 
-use arcanum_client::main_menu::menu_ready;
+use arcanum_client::main_menu::{MenuLabel, FitToBaseline};
+use arcanum_client::options::OptionSlot;
 use arcanum_client::{
     ArcanumAssetsPlugin, BitmapTextPlugin, DisplayPlugin, FontsPlugin, GameSettings, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
-    ScreensPlugin, VfsAssetPlugin,
+    OptionsPlugin, ScreensPlugin, VfsAssetPlugin,
 };
+use arcanum_client::AppState;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 /// Debugging aid: when set to a file path, saves the window there once the menu has loaded,
 /// then exits.
 const SCREENSHOT_VAR: &str = "DEBUG_ARCANUM_SCREENSHOT";
+/// Debugging aid: `options` opens the Options screen instead of the main menu.
+const SCREEN_VAR: &str = "DEBUG_ARCANUM_SCREEN";
 
 fn main() {
     // Game data: `ARCANUM_DIR` (default `assets/Arcanum`), optional `ARCANUM_OVERRIDE` and
@@ -35,11 +39,25 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins((ArcanumAssetsPlugin, BitmapTextPlugin, DisplayPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
+        .add_plugins((
+            ArcanumAssetsPlugin,
+            BitmapTextPlugin,
+            DisplayPlugin,
+            FontsPlugin,
+            MenuAudioPlugin,
+            MainMenuPlugin,
+            OptionsPlugin,
+            ScreensPlugin,
+        ));
+
+    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options` opens straight onto the Options screen.
+    if std::env::var(SCREEN_VAR).is_ok_and(|v| v.eq_ignore_ascii_case("options")) {
+        app.add_systems(Startup, |mut next: ResMut<NextState<AppState>>| next.set(AppState::Options));
+    }
 
     if let Ok(path) = std::env::var(SCREENSHOT_VAR) {
         app.insert_resource(ScreenshotPath(path))
-            .add_systems(Update, screenshot_and_exit.run_if(menu_ready));
+            .add_systems(Update, screenshot_and_exit.run_if(screen_ready));
     }
     app.run();
 }
@@ -63,4 +81,13 @@ fn screenshot_and_exit(
     } else if *frames == 100 {
         exit.write(AppExit::Success);
     }
+}
+
+/// True once the menu or the Options screen is on screen and the background has been fitted.
+fn screen_ready(
+    labels: Query<(), With<MenuLabel>>,
+    slots: Query<(), With<OptionSlot>>,
+    pending: Query<(), With<FitToBaseline>>,
+) -> bool {
+    (!labels.is_empty() || !slots.is_empty()) && pending.is_empty()
 }

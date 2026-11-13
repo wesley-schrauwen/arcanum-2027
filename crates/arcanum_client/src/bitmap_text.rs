@@ -61,7 +61,7 @@ impl AssetLoader for BitmapFontLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["art"]
+        &["art", "ART", "Art"]
     }
 }
 

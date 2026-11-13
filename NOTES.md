@@ -1,7 +1,7 @@
 # Project notes (handoff)
 
 Working notes for whoever picks this up next, human or agent. Read this first, then `README.md`.
-Last updated: 2026-11-13 (bitmap fonts).
+Last updated: 2026-11-13 (options screen).
 
 ## What this is
 
@@ -17,7 +17,8 @@ Working end to end: `cargo run -p arcanum_client` opens a window and shows the o
 at any supported resolution, with the original menu music. The five entries from `MainMenu.mes`
 are buttons: hover brightens the text and plays the original hover sound; a click plays the click
 sound and runs the action. Single Player, Options and Credits open placeholder screens (Esc
-returns), Exit Game quits, MultiPlayer logs "not implemented".
+returns), Exit Game quits, MultiPlayer logs "not implemented". Options opens the original
+options screen (see below).
 
 | Area | State |
 |---|---|
@@ -26,10 +27,11 @@ returns), Exit Game quits, MultiPlayer logs "not implemented".
 | `.art` sprites | Frame decode done (raw + RLE, palettes, 8 rotations). No animation playback. |
 | Bevy integration | Done. VFS is Bevy's default asset source; `.art` → `Image`, `.mes` → `MesAsset`. |
 | Main menu | Interactive: buttons, hover, click, `AppState` transitions, placeholder screens. |
+| Options screen | Original art and text; Game/Video/Sound tabs, arrows on every setting, commit on change. Resolution: arrows pick, Update applies, then a 15 s confirm/auto-revert. Settings are "dumb plugs": stored, not applied (except resolution/fullscreen), not saved. |
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50%) and hover/click sounds. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 128 tests, 102 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 153 tests, 127 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -62,18 +64,21 @@ crates/arcanum_client/           the Bevy game
   src/main.rs                    app setup; DEBUG_ARCANUM_SCREENSHOT handling
   src/resource_pack.rs           ResourcePack (game dir, override, module) + VFS mount order + `paths::*`
   src/vfs_asset.rs               VfsAssetReader / VfsAssetPlugin: VFS as Bevy's asset source
-  src/art_loader.rs              ArtAssetLoader: .art → Image (frame 0)
+  src/art_loader.rs              ArtAssetLoader: .art → Image (frame 0); ArtFramesLoader: all frames
   src/mes_loader.rs              MesAsset / MesAssetLoader
   src/settings.rs                DisplayResolution, GameSettings, DisplayPlugin, UiScale
   src/main_menu.rs               AppState, MenuAction, MainMenuPlugin: camera, background, buttons,
                                  hover highlight, Activate observer, menu_ready
-  src/screens.rs                 ScreensPlugin: placeholder screens, Esc back to the menu
+  src/options.rs                 OptionsPlugin: Options screen, OptionId/OptionsTab model, resolution confirm
+  src/widgets.rs                 WidgetsPlugin: HoverText (+Selected), FrameButton (art-frame buttons)
+  src/screens.rs                 ScreensPlugin: placeholder screens (Single Player, Credits), Esc back
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              40 Bevy tests, no window/GPU/game data
+  tests/headless.rs              58 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
+plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management)
 ```
 
 ## Running
@@ -90,7 +95,8 @@ cargo test --workspace                              # real-data tests skip witho
 | `ARCANUM_MODULE` | Module to mount from `modules/`. Default `Arcanum`. |
 | `ARCANUM_RES` | `WxH`, e.g. `3440x1440`. Invalid values fall back to 1920x1080. |
 | `ARCANUM_FULLSCREEN` | `1`/`true` for borderless fullscreen. |
-| `DEBUG_ARCANUM_SCREENSHOT` | Path; saves the window once the menu is ready, then exits. Used to verify rendering. |
+| `DEBUG_ARCANUM_SCREENSHOT` | Path; saves the window once the menu (or Options) is ready, then exits. Used to verify rendering. |
+| `DEBUG_ARCANUM_SCREEN` | `options` opens straight onto the Options screen (for screenshots). |
 
 ## Format knowledge
 
@@ -132,6 +138,13 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   **Assumption**: the main menu uses `Morph30Font`. The menu code (`FUN_00546340`) draws with font
   handles at `0x64c210`/`0x64c218`/`0x64c0cc`/`0x64c228`, chosen by flags; where those are created
   was not traced.
+- **Options screen** (original): full-screen `OptionsMenuBack.ART` (800x600): title plate,
+  tab box (Game/Video/Sound/Done = `MainMenu.mes` 4000-4003), 2x4 grid of 213x56 slots
+  (`OptionSlider.ART` tube, `OptionMultiChoice.ART` value window), arrow buttons
+  `SldrButt_L/R_Arrow.ART` (frames: 0 normal, 1 pressed, 2 hover). Setting names in
+  `mes/options_ui.mes`; values in `OptionsOffOn/OptionsWalk/OptionsFloats.mes`
+  (`OptionsDifficulty`/`OptionsCombatMode` exist but are unused by design). The original had
+  no Cancel: changes apply live. Layout constants are in `options.rs` (original pixels).
 - Not yet investigated: the engine's 5-rotation mirrored-sprite optimisation, art id → file name
   mapping (`interface.mes`, `item_inven.mes` etc. look like the indexes), fonts
   (`art/morph15font.art` and similar), sound formats, `.dlg`, `scr/` scripts, maps (`terrain/`,
@@ -142,6 +155,15 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 - Asset paths live in `resource_pack::paths`, grouped by kind (`backgrounds`, `interface`,
   `portraits`, `textures`, `items`, `critters`, `scenery`, `text`, `sound`). Add new ones there,
   plus to `ALL_FILES`/`ALL_DIRS` so the real-data test checks they exist.
+- **Owner's design decisions (Options):** turn-based combat only (no combat mode setting); a
+  single difficulty (no difficulty setting); no Module, Violence Filter, Follower Skills,
+  Auto Switch Weapons, Always Run or Control Followers settings; every change commits immediately,
+  no Cancel. Resolution is the exception: its arrows only pick a pending value; Done (or Esc)
+  applies it and asks "Confirm Resolution" before returning to the menu. Keep keeps it; Revert, Esc
+  or 15 s without an answer restores the previous one; either way the menu follows. The rest
+  of the screen is locked while the question is up. Settings are dumb plugs for now;
+  English only (a future text manager may hot-swap strings). Tabs: Game = Auto Attack, Combat
+  Taunts; Video = Brightness, Text Duration, Floats, Float Speed, Fullscreen, Resolution; Sound = Effects, Voice, Music.
 - UI and camera are authored against a **1080-unit-tall baseline**. The camera is
   `FixedVertical { viewport_height: 1080 }`, and `UiScale` = window logical height / 1080.
   Original 800x600 art is scaled ×1.8 and pillarboxed.
@@ -169,6 +191,9 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 - `BitmapText` is one line only: no wrapping, no alignment options, no `\n`. Characters
   outside Windows-1252 render as `?`.
 - Bitmap text is upscaled with linear filtering (×1.8 at 1080p), so it is slightly soft.
+- Options sliders only step with the arrows (no click or drag on the tube). The bottom help box
+  and the round lens (`OptionsPCLens.art`) on the options art are unused.
+- `.art` loaders register `art`, `ART` and `Art`: Bevy's extension match is case-sensitive.
 - Hover and click are tested headlessly by inserting `Hovered` and triggering `Activate`. The
   real pointer path is only checked manually: a screenshot run with the mouse over the window
   showed the entry under the pointer highlighted.
@@ -178,15 +203,17 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 
 ## Suggested next steps
 
-1. Single Player menu: the original's second level (`MainMenu.mes` 50 New Game, 51 Load Game, ...)
+1. Make settings take effect: music/effects volume on the audio, brightness on the camera.
+   Then persist `GameSettings` (owner deferred this).
+2. Single Player menu: the original's second level (`MainMenu.mes` 50 New Game, 51 Load Game, ...)
    in place of the placeholder screen, then menu keyboard hotkeys.
-2. Multi-line `BitmapText` (wrapping, alignment) for longer UI text such as credits.
-3. Art id → path mapping via the `.mes` index files, so assets can be loaded by game id.
-4. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
-5. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the
+3. Multi-line `BitmapText` (wrapping, alignment) for longer UI text such as credits.
+4. Art id → path mapping via the `.mes` index files, so assets can be loaded by game id.
+5. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
+6. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the
    `.art`, so new art and upscales can drop in. Plus a coverage report of replaced assets.
-6. Steam install auto-detection (libraryfolders.vdf) as the default `ARCANUM_DIR`.
-7. Later: options (volume, resolution), maps/tiles, critters, dialogue, scripts, saves.
+7. Steam install auto-detection (libraryfolders.vdf) as the default `ARCANUM_DIR`.
+8. Later: maps/tiles, critters, dialogue, scripts, saves.
 
 ## Art pipeline (outside the repo)
 
