@@ -9,7 +9,8 @@
 //! - the info toggle (`TextToggle`) at the top of the oval.
 //!
 //! Hovering a button shows its hover help (`MainMenu.mes` 7002, 7020, 7022, 7025) in the
-//! bottom bar's text box.
+//! bottom bar's text box. The bars, Back/Next and hover help are shared with the other menu
+//! screens ([`crate::menu_window`]).
 //!
 //! Saving does not exist yet, so [`SaveGames`] is empty unless something fills it. The list,
 //! selection, Delete (which only removes the entry from [`SaveGames`]) and the info toggle work
@@ -22,12 +23,13 @@ use bevy::ui_widgets::{Activate, ActivateOnPress, Button};
 
 use crate::art_loader::ArtFrames;
 use crate::audio::MenuSounds;
-use crate::fonts::{ArcanumFonts, ORIGINAL_SCALE, UiFont};
+use crate::fonts::{ArcanumFonts, UiFont};
 use crate::loading::LoadRequest;
-use crate::main_menu::{AppState, HOVER_COLOR, MenuText};
-use crate::mes_loader::MesAsset;
+use crate::main_menu::{AppState, HOVER_COLOR};
+pub use crate::menu_window::{HoverHelp, HoverHelpText, INFO_COLOR};
+use crate::menu_window::{MenuWindowPlugin, TOP_BAR_HEIGHT, WindowArt, at, image_button, rect, screen_root, spawn_frame};
 use crate::resource_pack::paths::interface;
-use crate::widgets::{FrameButton, HoverText, WidgetsPlugin};
+use crate::widgets::HoverText;
 
 /// A save game as the list shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,26 +76,13 @@ pub struct SaveRow(pub usize);
 #[derive(Component)]
 pub struct SaveInfo;
 
-/// The bottom bar's hover help text.
-#[derive(Component)]
-pub struct HoverHelpText;
-
-/// `MainMenu.mes` id of a button's hover help, and its English fallback.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct HoverHelp(pub u32, pub &'static str);
-
 /// Shown in the list when there are no saves. Not in the game's text.
 pub const NO_SAVES: &str = "No saved games";
 
 /// Save list entries.
 pub const ROW_COLOR: Color = Color::srgb_u8(214, 186, 128);
-/// Details over the screenshot and the hover help.
-pub const INFO_COLOR: Color = Color::srgb_u8(236, 220, 180);
 
 // Layout in original 800x600 pixels; everything is multiplied by ORIGINAL_SCALE.
-const TOP_BAR_HEIGHT: f32 = 41.0;
-const BACKGROUND_HEIGHT: f32 = 400.0;
-const BOTTOM_BAR_TOP: f32 = TOP_BAR_HEIGHT + BACKGROUND_HEIGHT;
 /// Inside the list box (background 33,111 - 209,343), offset to the screen.
 const LIST: Rect = Rect { min: Vec2::new(38.0, 116.0 + TOP_BAR_HEIGHT), max: Vec2::new(204.0, 338.0 + TOP_BAR_HEIGHT) };
 /// Portrait ring over the socket above the list.
@@ -102,26 +91,17 @@ const LENS_SIZE: Vec2 = Vec2::new(89.0, 89.0);
 /// Screenshot frame over the oval window.
 const SHOT: Rect = Rect { min: Vec2::new(281.0, 55.0 + TOP_BAR_HEIGHT), max: Vec2::new(749.0, 355.0 + TOP_BAR_HEIGHT) };
 /// Buttons: positions from the original's screen table.
-const BACK_AT: Vec2 = Vec2::new(69.0, BOTTOM_BAR_TOP + 55.0);
-const LOAD_AT: Vec2 = Vec2::new(675.0, BOTTOM_BAR_TOP + 55.0);
-const ROUND_BUTTON: Vec2 = Vec2::new(61.0, 61.0);
 const DELETE_AT: Vec2 = Vec2::new(115.0, 396.0);
 const DELETE_SIZE: Vec2 = Vec2::new(38.0, 37.0);
 const TOGGLE_AT: Vec2 = Vec2::new(499.0, 82.0);
 const TOGGLE_SIZE: Vec2 = Vec2::new(33.0, 33.0);
-/// The bottom bar's text box.
-const HELP_BOX: Rect = Rect { min: Vec2::new(206.0, BOTTOM_BAR_TOP + 58.0), max: Vec2::new(594.0, BOTTOM_BAR_TOP + 150.0) };
 
 /// Art handles, loaded at startup so the screen opens instantly.
 #[derive(Resource)]
 struct LoadGameArt {
-    top_bar: Handle<Image>,
-    bottom_bar: Handle<Image>,
     background: Handle<Image>,
     lens: Handle<Image>,
     shot_cover: Handle<Image>,
-    next: Handle<ArtFrames>,
-    back: Handle<ArtFrames>,
     delete: Handle<ArtFrames>,
     toggle: Handle<ArtFrames>,
 }
@@ -134,8 +114,8 @@ pub struct LoadGamePlugin;
 
 impl Plugin for LoadGamePlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<WidgetsPlugin>() {
-            app.add_plugins(WidgetsPlugin);
+        if !app.is_plugin_added::<MenuWindowPlugin>() {
+            app.add_plugins(MenuWindowPlugin);
         }
         app.init_resource::<SaveGames>()
             .init_resource::<LoadGameState>()
@@ -149,7 +129,6 @@ impl Plugin for LoadGamePlugin {
                 (
                     request_rebuild,
                     build_screen.run_if(resource_exists::<RebuildLoadGame>),
-                    show_hover_help,
                     show_toggle_frame,
                 )
                     .chain()
@@ -161,13 +140,9 @@ impl Plugin for LoadGamePlugin {
 
 fn load_art(mut commands: Commands, assets: Res<AssetServer>) {
     commands.insert_resource(LoadGameArt {
-        top_bar: assets.load(interface::TOP_BAR),
-        bottom_bar: assets.load(interface::BOTTOM_BAR),
         background: assets.load(interface::SAVE_LOAD_BACK),
         lens: assets.load(interface::SAVE_LOAD_LENS),
         shot_cover: assets.load(interface::SAVE_SHOT_COVER),
-        next: assets.load(interface::NEXT_BUTTON),
-        back: assets.load(interface::BACK_BUTTON),
         delete: assets.load(interface::DELETE_BUTTON),
         toggle: assets.load(interface::TEXT_TOGGLE),
     });
@@ -186,44 +161,12 @@ fn request_rebuild(mut commands: Commands, saves: Res<SaveGames>, state: Res<Loa
     }
 }
 
-fn px(v: f32) -> Val {
-    Val::Px(v * ORIGINAL_SCALE)
-}
-
-/// An absolutely positioned node at `rect` (original pixels).
-fn at(rect: Rect) -> Node {
-    Node {
-        position_type: PositionType::Absolute,
-        left: px(rect.min.x),
-        top: px(rect.min.y),
-        width: px(rect.width()),
-        height: px(rect.height()),
-        ..default()
-    }
-}
-
-fn rect(at: Vec2, size: Vec2) -> Rect {
-    Rect::from_corners(at, at + size)
-}
-
-fn image_button(action: LoadGameAction, help: HoverHelp, frames: &Handle<ArtFrames>, rect: Rect) -> impl Bundle {
-    (
-        action,
-        help,
-        Button,
-        ActivateOnPress,
-        Hovered::default(),
-        FrameButton::arrow(frames.clone()),
-        ImageNode::default(),
-        at(rect),
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn build_screen(
     mut commands: Commands,
     existing: Query<Entity, With<LoadGameScreen>>,
     art: Res<LoadGameArt>,
+    frame: Res<WindowArt>,
     saves: Res<SaveGames>,
     state: Res<LoadGameState>,
     fonts: Option<Res<ArcanumFonts>>,
@@ -236,31 +179,16 @@ fn build_screen(
     let selected = state.selected.and_then(|i| saves.0.get(i).map(|s| (i, s)));
 
     commands
-        .spawn((
-            LoadGameScreen,
-            DespawnOnExit(AppState::LoadGame),
-            // Black behind the art's transparent windows (the menu background stays loaded).
-            BackgroundColor(Color::BLACK),
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                left: Val::Percent(50.0),
-                margin: UiRect::left(px(-400.0)),
-                width: px(800.0),
-                height: px(600.0),
-                ..default()
-            },
-        ))
+        .spawn((LoadGameScreen, DespawnOnExit(AppState::LoadGame), screen_root()))
         .with_children(|screen| {
-            screen.spawn((ImageNode::new(art.top_bar.clone()), at(rect(Vec2::ZERO, Vec2::new(800.0, TOP_BAR_HEIGHT)))));
-            screen.spawn((
-                ImageNode::new(art.background.clone()),
-                at(rect(Vec2::new(0.0, TOP_BAR_HEIGHT), Vec2::new(800.0, BACKGROUND_HEIGHT))),
-            ));
-            screen.spawn((
-                ImageNode::new(art.bottom_bar.clone()),
-                at(rect(Vec2::new(0.0, BOTTOM_BAR_TOP), Vec2::new(800.0, 159.0))),
-            ));
+            spawn_frame(
+                screen,
+                &frame,
+                &fonts,
+                art.background.clone(),
+                LoadGameAction::Back,
+                (LoadGameAction::Load, HoverHelp(7020, "Load Game")),
+            );
             // The portrait would go under the ring; saves have no portrait yet.
             screen.spawn((ImageNode::new(art.lens.clone()), at(rect(LENS_AT, LENS_SIZE))));
             // The screenshot would go under the frame; saves have no screenshot yet.
@@ -268,7 +196,7 @@ fn build_screen(
 
             // Save list.
             screen
-                .spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), overflow: Overflow::clip(), ..at(LIST) })
+                .spawn(Node { flex_direction: FlexDirection::Column, row_gap: crate::menu_window::px(2.0), overflow: Overflow::clip(), ..at(LIST) })
                 .with_children(|list| {
                     if saves.0.is_empty() {
                         let mut empty = list.spawn(TextColor(ROW_COLOR));
@@ -301,7 +229,7 @@ fn build_screen(
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
-                            row_gap: px(4.0),
+                            row_gap: crate::menu_window::px(4.0),
                             ..at(SHOT)
                         },
                     ))
@@ -313,8 +241,6 @@ fn build_screen(
                     });
             }
 
-            screen.spawn(image_button(LoadGameAction::Back, HoverHelp(7002, "Previous Screen"), &art.back, rect(BACK_AT, ROUND_BUTTON)));
-            screen.spawn(image_button(LoadGameAction::Load, HoverHelp(7020, "Load Game"), &art.next, rect(LOAD_AT, ROUND_BUTTON)));
             screen.spawn(image_button(LoadGameAction::Delete, HoverHelp(7022, "Delete Save Game"), &art.delete, rect(DELETE_AT, DELETE_SIZE)));
             screen.spawn((
                 LoadGameAction::ToggleInfo,
@@ -325,13 +251,6 @@ fn build_screen(
                 ImageNode::default(),
                 at(rect(TOGGLE_AT, TOGGLE_SIZE)),
             ));
-
-            screen
-                .spawn(Node { justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..at(HELP_BOX) })
-                .with_children(|help_box| {
-                    let mut help = help_box.spawn((HoverHelpText, TextColor(INFO_COLOR)));
-                    fonts.insert_text(&mut help, "", UiFont::Small);
-                });
         });
 }
 
@@ -351,33 +270,6 @@ fn show_toggle_frame(
             && image.image != *frame
         {
             image.image = frame.clone();
-        }
-    }
-}
-
-/// Shows the hovered button's help in the bottom bar.
-fn show_hover_help(
-    buttons: Query<(&HoverHelp, &Hovered)>,
-    menu_text: Option<Res<MenuText>>,
-    mes: Res<Assets<MesAsset>>,
-    mut help: Query<(Option<&mut crate::bitmap_text::BitmapText>, Option<&mut Text>), With<HoverHelpText>>,
-) {
-    let wanted = buttons
-        .iter()
-        .find(|(_, hovered)| hovered.get())
-        .map(|(HoverHelp(id, fallback), _)| {
-            menu_text.as_ref().and_then(|t| mes.get(&t.0)).and_then(|m| m.get(*id)).unwrap_or(fallback).to_string()
-        })
-        .unwrap_or_default();
-    for (bitmap, text) in &mut help {
-        if let Some(mut bitmap) = bitmap {
-            if bitmap.text != wanted {
-                bitmap.text = wanted.clone();
-            }
-        } else if let Some(mut text) = text
-            && text.0 != wanted
-        {
-            text.0 = wanted.clone();
         }
     }
 }
@@ -452,10 +344,8 @@ mod tests {
 
     #[test]
     fn layout_matches_the_original_screen() {
-        // The three art pieces stack into 800x600.
-        assert_eq!(BOTTOM_BAR_TOP + 159.0, 600.0);
         // Buttons sit inside the screen.
-        for (at, size) in [(BACK_AT, ROUND_BUTTON), (LOAD_AT, ROUND_BUTTON), (DELETE_AT, DELETE_SIZE), (TOGGLE_AT, TOGGLE_SIZE)] {
+        for (at, size) in [(DELETE_AT, DELETE_SIZE), (TOGGLE_AT, TOGGLE_SIZE)] {
             assert!(at.x + size.x <= 800.0 && at.y + size.y <= 600.0, "{at:?}");
         }
         // The screenshot frame fills the oval window (468x300).
