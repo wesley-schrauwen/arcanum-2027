@@ -1,8 +1,8 @@
 //! The New Game screen: the original's character picker (`PreGenCharacterBase`, 800x400) in the
 //! shared menu frame ([`crate::menu_window`]).
 //!
-//! Scaffold only: the portrait box, the arrows beside it, the four info bars and the
-//! description panels are art, with nothing in them yet. Back returns to the Single Player menu;
+//! Reached from the New Game choice menu (Pick Character). Scaffold only: the portrait box, the arrows beside it, the four info bars and the
+//! description panels are art, with nothing in them yet. Back returns to the New Game choice;
 //! Next (hover help "Next Screen", `MainMenu.mes` 7003) goes through the loading screen into
 //! the world placeholder.
 
@@ -73,7 +73,7 @@ fn on_activate(
         sounds.play_button_press(&mut commands);
     }
     match action {
-        NewGameAction::Back => next_state.set(AppState::SinglePlayer),
+        NewGameAction::Back => next_state.set(AppState::NewGameChoice),
         NewGameAction::Next => {
             // Character choice comes later; for now straight into the world placeholder.
             commands.insert_resource(LoadRequest::new(AppState::InGame));

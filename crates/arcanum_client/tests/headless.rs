@@ -59,7 +59,7 @@ use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
 // ---------------------------------------------------------------------------------------------
 // Fixtures
 
-const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n{34}{Onward}{50}{Begin}{51}{Resume}{52}{Latest}{53}{Movie}{54}{Back}\r\n{4000}{Gameplay}{4001}{Picture}{4002}{Audio}{4003}{Finished}\r\n";
+const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n{34}{Onward}{50}{Begin}{51}{Resume}{52}{Latest}{53}{Movie}{54}{Back}{420}{Premade}{421}{Custom}{422}{Return}\r\n{4000}{Gameplay}{4001}{Picture}{4002}{Audio}{4003}{Finished}\r\n";
 
 /// An 8x6 static sprite whose pixel at index `i` uses palette index `i % 256`.
 fn menu_art_indices() -> Vec<u8> {
@@ -757,8 +757,7 @@ fn cancel_and_escape_return_to_the_main_menu() {
 
 #[test]
 fn new_game_goes_through_the_loading_screen_into_the_world() {
-    let mut app = open_single_player(&Fixture::new());
-    activate(&mut app, MenuAction::NewGame);
+    let mut app = open_new_game_picker(&Fixture::new());
     assert_eq!(state(&app), AppState::NewGame);
     press_new_game(&mut app, NewGameAction::Next);
     assert_eq!(state(&app), AppState::Loading);
@@ -1785,9 +1784,7 @@ fn press_new_game(app: &mut App, action: NewGameAction) {
 
 #[test]
 fn new_game_shows_its_screen_and_goes_back() {
-    let mut app = open_single_player(&Fixture::new());
-    activate(&mut app, MenuAction::NewGame);
-    app.update();
+    let mut app = open_new_game_picker(&Fixture::new());
     let world = app.world_mut();
     assert_eq!(world.query::<&NewGameScreen>().iter(world).count(), 1);
     assert_eq!(world.query::<&NewGameAction>().iter(world).count(), 2, "Back and Next");
@@ -1805,14 +1802,14 @@ fn new_game_shows_its_screen_and_goes_back() {
     assert_eq!(texts_in(&mut app, help), ["Next Screen"]);
 
     press_new_game(&mut app, NewGameAction::Back);
-    assert_eq!(state(&app), AppState::SinglePlayer);
+    assert_eq!(state(&app), AppState::NewGameChoice);
     let world = app.world_mut();
     assert_eq!(world.query::<&NewGameScreen>().iter(world).count(), 0);
 
-    activate(&mut app, MenuAction::NewGame);
+    activate(&mut app, MenuAction::PickCharacter);
     app.update();
     press_escape(&mut app);
-    assert_eq!(state(&app), AppState::SinglePlayer, "Escape goes back too");
+    assert_eq!(state(&app), AppState::NewGameChoice, "Escape goes back too");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1867,4 +1864,46 @@ fn wrapped_bitmap_text_grows_to_several_lines() {
     let lines = (height(&app, block) - 1.0) / SMALL_LINE as f32;
     assert!(lines >= 4.0, "wrapped into {lines} lines");
     assert_eq!(width(&app, block), 41.0, "as wide as the wrap width (plus the shadow)");
+}
+
+// ---------------------------------------------------------------------------------------------
+// New Game choice (pre-made or custom)
+
+fn open_new_game_picker(fx: &Fixture) -> App {
+    let mut app = open_single_player(fx);
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    activate(&mut app, MenuAction::PickCharacter);
+    app.update();
+    app
+}
+
+#[test]
+fn new_game_first_asks_pre_made_or_custom() {
+    let mut app = open_single_player(&Fixture::new());
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    assert_eq!(state(&app), AppState::NewGameChoice);
+    assert_eq!(
+        label_order(&mut app),
+        [(420, "Premade"), (421, "Custom"), (422, "Return")].map(|(id, t)| (id, t.to_string()))
+    );
+    // Character creation does not exist yet: dimmed and inert.
+    let custom = button_for(&mut app, MenuAction::CreateCharacter);
+    assert!(app.world().get::<Button>(custom).is_none());
+    assert_eq!(label_color(&mut app, custom), DISABLED_COLOR);
+
+    activate(&mut app, MenuAction::BackToSinglePlayer);
+    app.update();
+    assert_eq!(state(&app), AppState::SinglePlayer);
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::SinglePlayer, "Escape goes back one level");
+
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    activate(&mut app, MenuAction::PickCharacter);
+    app.update();
+    assert_eq!(state(&app), AppState::NewGame);
 }
