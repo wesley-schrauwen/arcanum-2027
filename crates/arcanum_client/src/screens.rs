@@ -1,7 +1,8 @@
 //! Placeholder screens for the menu destinations that are not built yet (Options has its own
 //! screen in [`crate::options`]). Each shows its title (from `MainMenu.mes`) on the menu panel.
 //!
-//! Escape goes back to the main menu, except on the loading screen, which cannot be left.
+//! Escape goes back to the main menu (from Load Game, to the Single Player menu), except on the
+//! loading screen, which cannot be left.
 
 use bevy::prelude::*;
 
@@ -67,8 +68,11 @@ fn spawn_placeholder(
 }
 
 /// The screen Escape goes back to from `state`.
-pub fn back_from(_state: AppState) -> AppState {
-    AppState::MainMenu
+pub fn back_from(state: AppState) -> AppState {
+    match state {
+        AppState::LoadGame => AppState::SinglePlayer,
+        _ => AppState::MainMenu,
+    }
 }
 
 fn return_to_menu(

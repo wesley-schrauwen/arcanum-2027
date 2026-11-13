@@ -48,10 +48,29 @@ pub mod paths {
         /// Setting slot with a value window, 213x56.
         pub const OPTION_CHOICE: &str = "art/interface/OptionMultiChoice.ART";
         /// Left/right arrow buttons for setting slots, 29x30. Frames: normal, pressed, hover.
-        /// Pocket watch shown while loading: 30 frames at 15 fps.
-        pub const LOAD_INDICATOR: &str = "art/interface/LoadIndicator.ART";
         pub const ARROW_LEFT: &str = "art/interface/SldrButt_L_Arrow.ART";
         pub const ARROW_RIGHT: &str = "art/interface/SldrButt_R_Arrow.ART";
+        /// Pocket watch shown while loading: 30 frames at 15 fps.
+        pub const LOAD_INDICATOR: &str = "art/interface/LoadIndicator.ART";
+
+        // Load Game screen (interface art 745-748, 320-323, 32), laid out by the original's
+        // screen table in Arcanum.exe (0x5c4560).
+        /// Bars above (800x41) and below (800x159) the 800x400 menu screens.
+        pub const TOP_BAR: &str = "art/interface/CharCreateTopBar.ART";
+        pub const BOTTOM_BAR: &str = "art/interface/CharCreateBottomBar.ART";
+        /// Save list box, portrait socket and screenshot oval (transparent windows), 800x400.
+        pub const SAVE_LOAD_BACK: &str = "art/interface/SaveLoadBackground.ART";
+        /// Ring over the portrait, 89x89.
+        pub const SAVE_LOAD_LENS: &str = "art/interface/SaveLoadPCLens.ART";
+        /// Frame over the save's screenshot, 468x300.
+        pub const SAVE_SHOT_COVER: &str = "art/interface/SaveShotCover.ART";
+        /// Round bottom-bar buttons, 61x61. Frames: normal, pressed, hover.
+        pub const NEXT_BUTTON: &str = "art/interface/NextBut.ART";
+        pub const BACK_BUTTON: &str = "art/interface/BackBut.ART";
+        /// Delete button, 38x37. Frames: normal, pressed, hover.
+        pub const DELETE_BUTTON: &str = "art/interface/cncl_big.art";
+        /// Info display toggle, 33x33. Frames: off, on.
+        pub const TEXT_TOGGLE: &str = "art/interface/TextToggle.ART";
     }
 
     /// Character portraits (`.bmp`).
@@ -139,6 +158,15 @@ pub mod paths {
         backgrounds::LOADING[1],
         backgrounds::LOADING[2],
         interface::LOAD_INDICATOR,
+        interface::TOP_BAR,
+        interface::BOTTOM_BAR,
+        interface::SAVE_LOAD_BACK,
+        interface::SAVE_LOAD_LENS,
+        interface::SAVE_SHOT_COVER,
+        interface::NEXT_BUTTON,
+        interface::BACK_BUTTON,
+        interface::DELETE_BUTTON,
+        interface::TEXT_TOGGLE,
         interface::INDEX,
         portraits::INDEX,
         textures::TILE_NAMES,

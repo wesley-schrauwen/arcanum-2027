@@ -3,11 +3,12 @@ use std::sync::{Arc, RwLock};
 use arcanum_client::main_menu::{MenuLabel, FitToBaseline};
 use arcanum_client::options::OptionSlot;
 use arcanum_client::{
-    ArcanumAssetsPlugin, BitmapTextPlugin, ConfigPlugin, DisplayPlugin, FontsPlugin, LoadingPlugin, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
+    ArcanumAssetsPlugin, BitmapTextPlugin, ConfigPlugin, DisplayPlugin, FontsPlugin, LoadGamePlugin, LoadingPlugin, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
     OptionsPlugin, ScreensPlugin, VfsAssetPlugin,
 };
 use arcanum_client::AppState;
 use arcanum_client::config;
+use arcanum_client::load_game::{LoadGameScreen, sample_saves};
 use arcanum_client::loading::{LoadRequest, LoadingPicture};
 use arcanum_client::settings::EnvOverrides;
 use bevy::prelude::*;
@@ -16,7 +17,8 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 /// Debugging aid: when set to a file path, saves the window there once the menu has loaded,
 /// then exits.
 const SCREENSHOT_VAR: &str = "DEBUG_ARCANUM_SCREENSHOT";
-/// Debugging aid: `options` or `singleplayer` opens that screen instead of the main menu.
+/// Debugging aid: `options`, `singleplayer`, `loadgame` or `loading` opens that screen instead of
+/// the main menu.
 const SCREEN_VAR: &str = "DEBUG_ARCANUM_SCREEN";
 
 fn main() {
@@ -51,6 +53,7 @@ fn main() {
             ConfigPlugin,
             DisplayPlugin,
             FontsPlugin,
+            LoadGamePlugin,
             LoadingPlugin,
             MenuAudioPlugin,
             MainMenuPlugin,
@@ -58,10 +61,15 @@ fn main() {
             ScreensPlugin,
         ));
 
-    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options|singleplayer` opens straight onto that screen.
+    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options|singleplayer|loadgame|loading` opens that screen.
     let start = match std::env::var(SCREEN_VAR).unwrap_or_default().to_ascii_lowercase().as_str() {
         "options" => Some(AppState::Options),
         "singleplayer" => Some(AppState::SinglePlayer),
+        // With example saves, so the list and info display have something to show.
+        "loadgame" => {
+            app.insert_resource(sample_saves());
+            Some(AppState::LoadGame)
+        }
         // Stays up for a minute so it can be captured.
         "loading" => {
             app.insert_resource(LoadRequest::new(AppState::MainMenu).min_secs(60.0));
@@ -109,8 +117,9 @@ fn screen_ready(
     slots: Query<(), With<OptionSlot>>,
     pending: Query<(), With<FitToBaseline>>,
     loading: Query<&ImageNode, With<LoadingPicture>>,
+    load_game: Query<(), With<LoadGameScreen>>,
     images: Res<Assets<Image>>,
 ) -> bool {
     let loading_up = loading.iter().any(|p| images.get(&p.image).is_some());
-    (!labels.is_empty() || !slots.is_empty() || loading_up) && pending.is_empty()
+    (!labels.is_empty() || !slots.is_empty() || loading_up || !load_game.is_empty()) && pending.is_empty()
 }

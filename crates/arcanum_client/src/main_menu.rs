@@ -28,6 +28,8 @@ pub enum AppState {
     MainMenu,
     /// The Single Player menu (New Game, Load Game, ...).
     SinglePlayer,
+    /// The Load Game screen (see [`crate::load_game`]).
+    LoadGame,
     /// The loading screen on the way into the game (see [`crate::loading`]).
     Loading,
     /// Placeholder for the game world.
@@ -56,7 +58,7 @@ pub enum MenuAction {
 impl MenuAction {
     /// False for entries whose feature does not exist yet: shown dimmed, not clickable.
     pub fn is_available(self) -> bool {
-        !matches!(self, Self::LoadGame | Self::Continue)
+        !matches!(self, Self::Continue)
     }
 }
 
@@ -287,6 +289,7 @@ fn on_activate(
             next_state.set(AppState::Loading);
         }
         MenuAction::Cancel => next_state.set(AppState::MainMenu),
-        MenuAction::LoadGame | MenuAction::Continue => {}
+        MenuAction::LoadGame => next_state.set(AppState::LoadGame),
+        MenuAction::Continue => {}
     }
 }

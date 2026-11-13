@@ -19,6 +19,10 @@ use arcanum_client::options::{
 };
 use arcanum_client::loading::{LoadRequest, LoadingIndicator, LoadingPicture, LoadingProgress, LoadingScreen, MIN_LOADING_SECS};
 use arcanum_client::LoadingPlugin;
+use arcanum_client::LoadGamePlugin;
+use arcanum_client::load_game::{
+    HoverHelpText, LoadGameAction, LoadGameScreen, LoadGameState, NO_SAVES, SaveGames, SaveInfo, SaveRow, sample_saves,
+};
 use arcanum_client::screens::{PlaceholderScreen, RETURN_HINT};
 use arcanum_client::widgets::{FrameButton, Selected};
 use arcanum_client::resource_pack::paths;
@@ -284,7 +288,7 @@ fn menu_app(vfs: Vfs) -> App {
         .init_asset::<Font>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<GameSettings>()
-        .add_plugins((TimePlugin, BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, OptionsPlugin, ScreensPlugin, LoadingPlugin))
+        .add_plugins((TimePlugin, BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, OptionsPlugin, ScreensPlugin, LoadingPlugin, LoadGamePlugin))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
     app
 }
@@ -726,10 +730,10 @@ fn unbuilt_single_player_entries_are_dimmed_and_inert() {
     }
     let available: Vec<MenuAction> =
         buttons(&mut app).into_iter().map(|(_, a)| a).filter(|a| a.is_available()).collect();
-    assert_eq!(available, [MenuAction::NewGame, MenuAction::Cancel]);
+    assert_eq!(available, [MenuAction::NewGame, MenuAction::LoadGame, MenuAction::Cancel]);
 
-    // Even if triggered, they do nothing.
-    activate(&mut app, MenuAction::LoadGame);
+    // Even if triggered, Continue does nothing.
+    activate(&mut app, MenuAction::Continue);
     app.update();
     assert_eq!(state(&app), AppState::SinglePlayer);
 }
@@ -1639,4 +1643,125 @@ fn effects_and_voice_follow_their_settings() {
     assert_eq!(volumes(&mut app, true), [Volume::Linear(0.9)]);
     assert_eq!(volumes(&mut app, false), [Volume::Linear(0.1)]);
     assert_eq!(app.world().resource::<MenuSounds>().volume, Volume::Linear(0.9));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Load Game screen
+
+fn open_load_game(saves: SaveGames) -> App {
+    let mut app = open_single_player(&Fixture::new());
+    app.insert_resource(saves);
+    activate(&mut app, MenuAction::LoadGame);
+    app.update();
+    app.update();
+    app
+}
+
+fn load_game_button(app: &mut App, action: LoadGameAction) -> Entity {
+    let world = app.world_mut();
+    world.query::<(Entity, &LoadGameAction)>().iter(world).find(|(_, a)| **a == action).map(|(e, _)| e).unwrap()
+}
+
+fn press_load_game(app: &mut App, action: LoadGameAction) {
+    let entity = load_game_button(app, action);
+    app.world_mut().trigger(Activate { entity });
+    app.update();
+    app.update();
+}
+
+fn save_rows(app: &mut App) -> Vec<String> {
+    let world = app.world_mut();
+    let mut rows: Vec<(usize, Entity)> = world.query::<(Entity, &SaveRow)>().iter(world).map(|(e, r)| (r.0, e)).collect();
+    rows.sort();
+    rows.into_iter().map(|(_, e)| texts_in(app, e).remove(0)).collect()
+}
+
+#[test]
+fn load_game_opens_from_the_single_player_menu_and_goes_back() {
+    let mut app = open_load_game(SaveGames::default());
+    assert_eq!(state(&app), AppState::LoadGame);
+    let world = app.world_mut();
+    assert_eq!(world.query::<&LoadGameScreen>().iter(world).count(), 1);
+    for action in [LoadGameAction::Back, LoadGameAction::Load, LoadGameAction::Delete, LoadGameAction::ToggleInfo] {
+        load_game_button(&mut app, action);
+    }
+
+    press_load_game(&mut app, LoadGameAction::Back);
+    assert_eq!(state(&app), AppState::SinglePlayer);
+    activate(&mut app, MenuAction::LoadGame);
+    app.update();
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::SinglePlayer, "Escape also goes back one level");
+}
+
+#[test]
+fn without_saves_the_list_says_so_and_load_does_nothing() {
+    let mut app = open_load_game(SaveGames::default());
+    let world = app.world_mut();
+    let screen = world.query_filtered::<Entity, With<LoadGameScreen>>().single(world).unwrap();
+    assert!(texts_in(&mut app, screen).iter().any(|t| t == NO_SAVES));
+    assert!(save_rows(&mut app).is_empty());
+    press_load_game(&mut app, LoadGameAction::Load);
+    press_load_game(&mut app, LoadGameAction::Delete);
+    assert_eq!(state(&app), AppState::LoadGame);
+}
+
+#[test]
+fn saves_are_listed_and_can_be_selected_inspected_and_deleted() {
+    let mut app = open_load_game(sample_saves());
+    assert_eq!(save_rows(&mut app), ["Before the bridge", "Shrouded Hills", "Crash site"]);
+    assert_eq!(app.world().resource::<LoadGameState>().selected, Some(0), "newest selected");
+
+    press_load_game(&mut app, LoadGameAction::Select(1));
+    assert_eq!(app.world().resource::<LoadGameState>().selected, Some(1));
+    let selected_row = {
+        let world = app.world_mut();
+        world.query::<(Entity, &SaveRow)>().iter(world).find(|(_, r)| r.0 == 1).unwrap().0
+    };
+    assert_eq!(app.world().get::<TextColor>(selected_row).unwrap().0, HOVER_COLOR);
+
+    // Info display: off until toggled.
+    let info_count = |app: &mut App| {
+        let world = app.world_mut();
+        world.query::<&SaveInfo>().iter(world).count()
+    };
+    assert_eq!(info_count(&mut app), 0);
+    press_load_game(&mut app, LoadGameAction::ToggleInfo);
+    let info = {
+        let world = app.world_mut();
+        world.query_filtered::<Entity, With<SaveInfo>>().single(world).unwrap()
+    };
+    assert_eq!(texts_in(&mut app, info), ["Shrouded Hills", "Level 3", "Shrouded Hills", "12 Nov 2026 21:05"]);
+    press_load_game(&mut app, LoadGameAction::ToggleInfo);
+    assert_eq!(info_count(&mut app), 0);
+
+    press_load_game(&mut app, LoadGameAction::Delete);
+    assert_eq!(save_rows(&mut app), ["Before the bridge", "Crash site"]);
+    assert_eq!(app.world().resource::<LoadGameState>().selected, Some(1), "the next save is selected");
+}
+
+#[test]
+fn load_goes_through_the_loading_screen() {
+    let mut app = open_load_game(sample_saves());
+    press_load_game(&mut app, LoadGameAction::Load);
+    assert_eq!(state(&app), AppState::Loading);
+    update_until(&mut app, |app| state(app) == AppState::InGame);
+}
+
+#[test]
+fn hovering_a_button_shows_its_help_in_the_bottom_bar() {
+    let mut app = open_load_game(SaveGames::default());
+    let help = |app: &mut App| {
+        let world = app.world_mut();
+        let e = world.query_filtered::<Entity, With<HoverHelpText>>().single(world).unwrap();
+        texts_in(app, e).remove(0)
+    };
+    assert_eq!(help(&mut app), "");
+    let delete = load_game_button(&mut app, LoadGameAction::Delete);
+    app.world_mut().entity_mut(delete).insert(Hovered(true));
+    app.update();
+    assert_eq!(help(&mut app), "Delete Save Game");
+    app.world_mut().entity_mut(delete).insert(Hovered(false));
+    app.update();
+    assert_eq!(help(&mut app), "");
 }
