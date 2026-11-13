@@ -58,6 +58,9 @@ pub mod paths {
         /// Bars above (800x41) and below (800x159) the 800x400 menu screens.
         pub const TOP_BAR: &str = "art/interface/CharCreateTopBar.ART";
         pub const BOTTOM_BAR: &str = "art/interface/CharCreateBottomBar.ART";
+        /// New Game character picker: portrait box with arrows, four info bars, two description
+        /// panels, 800x400.
+        pub const PREGEN_BACK: &str = "art/interface/PreGenCharacterBase.ART";
         /// Save list box, portrait socket and screenshot oval (transparent windows), 800x400.
         pub const SAVE_LOAD_BACK: &str = "art/interface/SaveLoadBackground.ART";
         /// Ring over the portrait, 89x89.
@@ -161,6 +164,7 @@ pub mod paths {
         interface::TOP_BAR,
         interface::BOTTOM_BAR,
         interface::SAVE_LOAD_BACK,
+        interface::PREGEN_BACK,
         interface::SAVE_LOAD_LENS,
         interface::SAVE_SHOT_COVER,
         interface::NEXT_BUTTON,

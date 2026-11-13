@@ -187,8 +187,8 @@ impl Floats {
     pub const ALL: [Self; 3] = [Self::Never, Self::Minimal, Self::Verbose];
 }
 
-/// Everything on the Options screen. Resolution, fullscreen and the three volumes have an effect
-/// so far; the rest are stored for systems that do not exist yet. Saved between runs by
+/// Everything on the Options screen. Resolution, fullscreen, brightness and the three volumes
+/// have an effect so far; the rest are stored for systems that do not exist yet. Saved between runs by
 /// [`crate::config`]. Sliders are `0.0..=1.0`.
 ///
 /// Missing fields deserialize to their defaults, so config files from older versions still load.
