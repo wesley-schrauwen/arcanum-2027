@@ -3,10 +3,12 @@ use std::sync::{Arc, RwLock};
 use arcanum_client::main_menu::{MenuLabel, FitToBaseline};
 use arcanum_client::options::OptionSlot;
 use arcanum_client::{
-    ArcanumAssetsPlugin, BitmapTextPlugin, DisplayPlugin, FontsPlugin, GameSettings, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
+    ArcanumAssetsPlugin, BitmapTextPlugin, ConfigPlugin, DisplayPlugin, FontsPlugin, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
     OptionsPlugin, ScreensPlugin, VfsAssetPlugin,
 };
 use arcanum_client::AppState;
+use arcanum_client::config;
+use arcanum_client::settings::EnvOverrides;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
@@ -24,9 +26,12 @@ fn main() {
         .open_vfs()
         .unwrap_or_else(|e| panic!("cannot open game data in {}: {e}", pack.game_dir.display()));
     let vfs = Arc::new(RwLock::new(vfs));
-    let settings = GameSettings::from_env();
+    // Defaults, then the saved config file, then ARCANUM_RES / ARCANUM_FULLSCREEN. Resolved before
+    // the window exists so it opens at the saved size.
+    let (settings, config) = config::load(config::path_from_env(), EnvOverrides::from_env());
     let mut app = App::new();
     app.insert_resource(settings.clone())
+        .insert_resource(config)
         .insert_resource(pack)
         // Must come before DefaultPlugins so the VFS replaces the default asset source.
         .add_plugins(VfsAssetPlugin::new(vfs))
@@ -42,6 +47,7 @@ fn main() {
         .add_plugins((
             ArcanumAssetsPlugin,
             BitmapTextPlugin,
+            ConfigPlugin,
             DisplayPlugin,
             FontsPlugin,
             MenuAudioPlugin,

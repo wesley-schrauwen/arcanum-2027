@@ -5,7 +5,9 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use arcanum_client::audio::{MENU_MUSIC_VOLUME, MenuMusic, MenuSounds};
+use arcanum_client::audio::{MENU_MUSIC_VOLUME, MenuMusic, MenuSounds, SoundEffect, VoiceLine, play_voice};
+use arcanum_client::config::{self, ConfigPlugin};
+use arcanum_client::settings::EnvOverrides;
 use arcanum_client::bitmap_text::{BitmapFontAsset, BitmapText, BitmapTextRendered, compose_rgba};
 use arcanum_client::fonts::{ArcanumFonts, ORIGINAL_SCALE};
 use arcanum_client::main_menu::{
@@ -32,6 +34,7 @@ use bevy::asset::io::{AssetReader, AssetReaderError, Reader};
 use bevy::asset::{AssetPlugin, LoadState};
 use bevy::audio::{AudioSource, PlaybackMode, Volume};
 use bevy::camera::ScalingMode;
+use bevy::ecs::system::RunSystemOnce;
 use bevy::picking::hover::Hovered;
 use bevy::state::app::StatesPlugin;
 use bevy::time::{TimePlugin, TimeUpdateStrategy};
@@ -1341,4 +1344,130 @@ fn missing_option_text_falls_back_to_english() {
     assert_eq!(first, (OptionId::AutoAttack, vec!["Auto Attack".into(), "Off".into()]));
     let done = options_button(&mut app, OptionsAction::Done);
     assert_eq!(texts_in(&mut app, done), ["Done"]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Saved settings
+
+/// Opens Options with settings saved to `path`, as the game does at boot.
+fn open_options_saving_to(path: &Path) -> App {
+    let mut app = open_options(&options_fixture());
+    let (settings, file) = config::load(Some(path.to_path_buf()), EnvOverrides::default());
+    app.insert_resource(settings).insert_resource(file).add_plugins(ConfigPlugin);
+    app
+}
+
+fn saved(path: &Path) -> GameSettings {
+    config::parse(&std::fs::read_to_string(path).unwrap(), "test")
+}
+
+#[test]
+fn leaving_options_saves_the_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cfg").join("config.toml");
+    let mut app = open_options_saving_to(&path);
+    press(&mut app, OptionsAction::Step { option: OptionId::AutoAttack, delta: 1 });
+    press(&mut app, OptionsAction::Tab(OptionsTab::Sound));
+    press(&mut app, OptionsAction::Step { option: OptionId::Music, delta: -1 });
+    assert!(!path.exists(), "nothing is written while the screen is open");
+
+    press(&mut app, OptionsAction::Done);
+    app.update();
+    assert_eq!(state(&app), AppState::MainMenu);
+    let s = saved(&path);
+    assert!(s.auto_attack);
+    assert_eq!(s.music_volume, 0.9);
+
+    // The next boot starts from the saved file.
+    let (booted, _) = config::load(Some(path.clone()), EnvOverrides::default());
+    assert_eq!(booted, s);
+}
+
+#[test]
+fn leaving_without_changes_still_writes_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut app = open_options_saving_to(&path);
+    press_escape(&mut app);
+    assert_eq!(saved(&path), GameSettings::default());
+}
+
+#[test]
+fn only_a_confirmed_resolution_is_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut app = open_options_saving_to(&path);
+    change_resolution(&mut app);
+    assert!(!path.exists(), "not saved while the confirmation is up");
+    press(&mut app, OptionsAction::RevertResolution);
+    app.update();
+    assert_eq!(saved(&path).resolution, DisplayResolution::Fhd);
+
+    let mut app = open_options_saving_to(&path);
+    change_resolution(&mut app);
+    press(&mut app, OptionsAction::KeepResolution);
+    app.update();
+    assert_eq!(saved(&path).resolution, DisplayResolution::Qhd);
+}
+
+#[test]
+fn menu_music_follows_the_music_setting() {
+    let fx = fixture_with_sounds();
+    let mut app = menu_app(fx.vfs());
+    app.insert_resource(GameSettings { music_volume: 0.2, ..default() });
+    run_until_menu_ready(&mut app);
+    let volume = |app: &mut App| {
+        let world = app.world_mut();
+        world.query_filtered::<&PlaybackSettings, With<MenuMusic>>().single(world).unwrap().volume
+    };
+    assert_eq!(volume(&mut app), Volume::Linear(MENU_MUSIC_VOLUME * 0.2), "starts at the saved level");
+
+    app.world_mut().resource_mut::<GameSettings>().music_volume = 0.6;
+    app.update();
+    assert_eq!(volume(&mut app), Volume::Linear(MENU_MUSIC_VOLUME * 0.6), "changes apply at once");
+    app.world_mut().resource_mut::<GameSettings>().music_volume = 0.0;
+    app.update();
+    assert_eq!(volume(&mut app), Volume::Linear(0.0));
+}
+
+#[test]
+fn effects_and_voice_follow_their_settings() {
+    let fx = fixture_with_sounds();
+    let mut app = menu_app(fx.vfs());
+    app.insert_resource(GameSettings { effects_volume: 0.4, voice_volume: 0.3, ..default() });
+    run_until_menu_ready(&mut app);
+    let volumes = |app: &mut App, effect: bool| -> Vec<Volume> {
+        let world = app.world_mut();
+        if effect {
+            world.query_filtered::<&PlaybackSettings, With<SoundEffect>>().iter(world).map(|p| p.volume).collect()
+        } else {
+            world.query_filtered::<&PlaybackSettings, With<VoiceLine>>().iter(world).map(|p| p.volume).collect()
+        }
+    };
+
+    // Interface sounds start at the Effects level.
+    let credits = button_for(&mut app, MenuAction::Credits);
+    app.world_mut().entity_mut(credits).insert(Hovered(true));
+    app.update();
+    assert_eq!(volumes(&mut app, true), [Volume::Linear(0.4)]);
+
+    // Voice lines start at the Voice level.
+    let line = app.world().resource::<MenuSounds>().click.clone().unwrap();
+    let settings = app.world().resource::<GameSettings>().clone();
+    app.world_mut().run_system_once(move |mut commands: Commands| {
+        play_voice(&mut commands, &settings, line.clone());
+    }).unwrap();
+    assert_eq!(volumes(&mut app, false), [Volume::Linear(0.3)]);
+
+    // Changes reach sounds that are already queued or playing, and new ones.
+    {
+        let mut s = app.world_mut().resource_mut::<GameSettings>();
+        s.effects_volume = 0.9;
+        s.voice_volume = 0.1;
+    }
+    app.update();
+    assert_eq!(volumes(&mut app, true), [Volume::Linear(0.9)]);
+    assert_eq!(volumes(&mut app, false), [Volume::Linear(0.1)]);
+    assert_eq!(app.world().resource::<MenuSounds>().volume, Volume::Linear(0.9));
 }

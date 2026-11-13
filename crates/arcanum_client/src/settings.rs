@@ -2,7 +2,8 @@
 //!
 //! All UI is authored against a 1080-pixel-tall baseline. [`UiScale`] is derived from the
 //! window's logical height, so layouts, text and hit areas stay proportional at any resolution.
-//! Settings are not persisted yet; `ARCANUM_RES=WxH` and `ARCANUM_FULLSCREEN=1` override the defaults.
+//! Settings are saved to a config file (see [`crate::config`]); `ARCANUM_RES=WxH` and
+//! `ARCANUM_FULLSCREEN=1` override what was saved.
 //!
 //! Supported resolutions run from 1280x720 to 7680x4320, with aspect ratios from 4:3 (the
 //! original art) to 2.4:1 (ultrawide).
@@ -12,6 +13,7 @@ use std::str::FromStr;
 
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Height, in logical units, that all UI and camera layout is authored against.
 pub const BASELINE_HEIGHT: f32 = 1080.0;
@@ -135,6 +137,29 @@ impl DisplayResolution {
     }
 }
 
+/// `WIDTHxHEIGHT`, the same form [`FromStr`] reads.
+impl fmt::Display for DisplayResolution {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (w, h) = self.dimensions();
+        write!(f, "{w}x{h}")
+    }
+}
+
+/// Saved as `"WIDTHxHEIGHT"`.
+impl Serialize for DisplayResolution {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// Read from `"WIDTHxHEIGHT"`; unsupported sizes are rejected.
+impl<'de> Deserialize<'de> for DisplayResolution {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// Parses and validates `WIDTHxHEIGHT` (e.g. `2560x1440`).
 impl FromStr for DisplayResolution {
     type Err = ResolutionError;
@@ -149,7 +174,8 @@ impl FromStr for DisplayResolution {
 }
 
 /// How much floating text appears over characters (`mes/OptionsFloats.mes`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Floats {
     Never,
     #[default]
@@ -161,10 +187,13 @@ impl Floats {
     pub const ALL: [Self; 3] = [Self::Never, Self::Minimal, Self::Verbose];
 }
 
-/// Everything on the Options screen. Only the display settings (resolution, fullscreen) have
-/// an effect so far; the rest are stored for systems that do not exist yet. Nothing is saved
-/// between runs. Sliders are `0.0..=1.0`.
-#[derive(Resource, Clone, Debug, PartialEq)]
+/// Everything on the Options screen. Resolution, fullscreen and the three volumes have an effect
+/// so far; the rest are stored for systems that do not exist yet. Saved between runs by
+/// [`crate::config`]. Sliders are `0.0..=1.0`.
+///
+/// Missing fields deserialize to their defaults, so config files from older versions still load.
+#[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GameSettings {
     pub resolution: DisplayResolution,
     pub fullscreen: bool,
@@ -200,6 +229,43 @@ impl Default for GameSettings {
     }
 }
 
+/// Settings forced by environment variables for this run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EnvOverrides {
+    pub resolution: Option<DisplayResolution>,
+    pub fullscreen: Option<bool>,
+}
+
+impl EnvOverrides {
+    /// Reads `ARCANUM_RES` and `ARCANUM_FULLSCREEN`. Invalid values are ignored with a message.
+    pub fn from_env() -> Self {
+        Self::from_vars(|name| std::env::var(name).ok())
+    }
+
+    /// Like [`Self::from_env`], reading variables through `var` (for tests).
+    pub fn from_vars(var: impl Fn(&str) -> Option<String>) -> Self {
+        let resolution = var("ARCANUM_RES").and_then(|value| match value.parse() {
+            Ok(res) => Some(res),
+            Err(e) => {
+                eprintln!("ignoring ARCANUM_RES: {e}");
+                None
+            }
+        });
+        let fullscreen = var("ARCANUM_FULLSCREEN")
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
+        Self { resolution, fullscreen }
+    }
+
+    pub fn apply(&self, settings: &mut GameSettings) {
+        if let Some(res) = self.resolution {
+            settings.resolution = res;
+        }
+        if let Some(fullscreen) = self.fullscreen {
+            settings.fullscreen = fullscreen;
+        }
+    }
+}
+
 impl GameSettings {
     /// Defaults, overridden by `ARCANUM_RES` and `ARCANUM_FULLSCREEN` when set.
     pub fn from_env() -> Self {
@@ -209,16 +275,36 @@ impl GameSettings {
     /// Like [`Self::from_env`], reading variables through `var` (for tests).
     pub fn from_vars(var: impl Fn(&str) -> Option<String>) -> Self {
         let mut settings = Self::default();
-        if let Some(value) = var("ARCANUM_RES") {
-            match value.parse() {
-                Ok(res) => settings.resolution = res,
-                Err(e) => eprintln!("ignoring ARCANUM_RES: {e}"),
+        EnvOverrides::from_vars(var).apply(&mut settings);
+        settings
+    }
+
+    /// Puts out-of-range values back in range: sliders are clamped to `0.0..=1.0` (a value that
+    /// is not a number becomes the default), and an unsupported resolution becomes the default.
+    /// Returns the names of the fields it changed.
+    pub fn sanitize(&mut self) -> Vec<&'static str> {
+        let defaults = Self::default();
+        let mut changed = Vec::new();
+        let sliders: [(&'static str, &mut f32, f32); 6] = [
+            ("brightness", &mut self.brightness, defaults.brightness),
+            ("text_duration", &mut self.text_duration, defaults.text_duration),
+            ("float_speed", &mut self.float_speed, defaults.float_speed),
+            ("effects_volume", &mut self.effects_volume, defaults.effects_volume),
+            ("voice_volume", &mut self.voice_volume, defaults.voice_volume),
+            ("music_volume", &mut self.music_volume, defaults.music_volume),
+        ];
+        for (name, value, default) in sliders {
+            let fixed = if value.is_finite() { value.clamp(0.0, 1.0) } else { default };
+            if fixed != *value {
+                *value = fixed;
+                changed.push(name);
             }
         }
-        if let Some(value) = var("ARCANUM_FULLSCREEN") {
-            settings.fullscreen = matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+        if !self.resolution.is_supported() {
+            self.resolution = defaults.resolution;
+            changed.push("resolution");
         }
-        settings
+        changed
     }
 
     /// The window resolution in physical pixels.
@@ -393,6 +479,47 @@ mod tests {
         let s = GameSettings { resolution: DisplayResolution::Qhd, ..default() };
         let r = s.window_resolution();
         assert_eq!((r.physical_width(), r.physical_height()), (2560, 1440));
+    }
+
+    #[test]
+    fn resolution_round_trips_as_text() {
+        assert_eq!(DisplayResolution::Qhd.to_string(), "2560x1440");
+        assert_eq!(DisplayResolution::Custom(1366, 768).to_string(), "1366x768");
+        for r in DisplayResolution::PRESETS.into_iter().chain([DisplayResolution::Custom(1366, 768)]) {
+            assert_eq!(r.to_string().parse(), Ok(r));
+        }
+    }
+
+    #[test]
+    fn sanitize_clamps_sliders_and_rejects_bad_resolutions() {
+        let mut s = GameSettings {
+            music_volume: 3.0,
+            effects_volume: -1.0,
+            brightness: f32::NAN,
+            voice_volume: 0.25,
+            resolution: DisplayResolution::Custom(1024, 768),
+            ..default()
+        };
+        let changed = s.sanitize();
+        assert_eq!(s.music_volume, 1.0);
+        assert_eq!(s.effects_volume, 0.0);
+        assert_eq!(s.brightness, 0.5, "not a number: default");
+        assert_eq!(s.voice_volume, 0.25, "in range: untouched");
+        assert_eq!(s.resolution, DisplayResolution::Fhd);
+        assert_eq!(changed, ["brightness", "effects_volume", "music_volume", "resolution"]);
+        assert!(GameSettings::default().sanitize().is_empty());
+    }
+
+    #[test]
+    fn env_overrides_only_touch_what_is_set() {
+        let base = GameSettings { resolution: DisplayResolution::Qhd, fullscreen: true, music_volume: 0.3, ..default() };
+        let mut s = base.clone();
+        EnvOverrides::from_vars(|_| None).apply(&mut s);
+        assert_eq!(s, base);
+        let o = EnvOverrides::from_vars(|name| (name == "ARCANUM_RES").then(|| "1280x720".into()));
+        assert_eq!(o, EnvOverrides { resolution: Some(DisplayResolution::Hd), fullscreen: None });
+        o.apply(&mut s);
+        assert_eq!(s, GameSettings { resolution: DisplayResolution::Hd, ..base });
     }
 
     #[test]
