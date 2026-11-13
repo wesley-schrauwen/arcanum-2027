@@ -67,6 +67,8 @@ fn rgba_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct ArtFrames {
     pub frames: Vec<Handle<Image>>,
+    /// Playback speed from the file, in frames per second.
+    pub frame_rate: u32,
 }
 
 impl ArtFrames {
@@ -105,7 +107,7 @@ impl AssetLoader for ArtFramesLoader {
         if frames.is_empty() {
             return Err(ArtLoadError::Art(ArtError::NoFrames));
         }
-        Ok(ArtFrames { frames })
+        Ok(ArtFrames { frames, frame_rate: art.frame_rate })
     }
 
     fn extensions(&self) -> &[&str] {

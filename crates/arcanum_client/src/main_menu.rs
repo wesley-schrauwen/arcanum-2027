@@ -15,6 +15,7 @@ use bevy::ui_widgets::{Activate, ActivateOnPress, Button};
 
 use crate::audio::MenuSounds;
 use crate::fonts::{ArcanumFonts, ORIGINAL_SCALE, UiFont};
+use crate::loading::LoadRequest;
 use crate::mes_loader::MesAsset;
 use crate::resource_pack::paths::{backgrounds, text};
 use crate::settings::BASELINE_HEIGHT;
@@ -27,8 +28,12 @@ pub enum AppState {
     MainMenu,
     /// The Single Player menu (New Game, Load Game, ...).
     SinglePlayer,
-    /// Placeholder until character selection and creation exist.
-    NewGame,
+    /// The Load Game screen (see [`crate::load_game`]).
+    LoadGame,
+    /// The loading screen on the way into the game (see [`crate::loading`]).
+    Loading,
+    /// Placeholder for the game world.
+    InGame,
     Options,
     Credits,
 }
@@ -53,7 +58,7 @@ pub enum MenuAction {
 impl MenuAction {
     /// False for entries whose feature does not exist yet: shown dimmed, not clickable.
     pub fn is_available(self) -> bool {
-        !matches!(self, Self::LoadGame | Self::Continue)
+        !matches!(self, Self::Continue)
     }
 }
 
@@ -278,8 +283,13 @@ fn on_activate(
         MenuAction::ExitGame => {
             exit.write(AppExit::Success);
         }
-        MenuAction::NewGame => next_state.set(AppState::NewGame),
+        MenuAction::NewGame => {
+            // Character selection and creation will come first; for now go straight to loading.
+            commands.insert_resource(LoadRequest::new(AppState::InGame));
+            next_state.set(AppState::Loading);
+        }
         MenuAction::Cancel => next_state.set(AppState::MainMenu),
-        MenuAction::LoadGame | MenuAction::Continue => {}
+        MenuAction::LoadGame => next_state.set(AppState::LoadGame),
+        MenuAction::Continue => {}
     }
 }
