@@ -262,7 +262,25 @@ What is known so far:
   next to each other, plus his name. Prototype header: version 0x77 · prototype ObjectID (none,
   kind -1) · ObjectID (kind 1, proto 16094) · `u32 type` · `u16 0x11` · bitmap; but the popcount
   of a 5-word bitmap is 18, not 17, so the prototype field encoding still needs working out.
-- Next: decode prototypes, mount `data/` in the VFS (proto + Players), then the Rust reader.
+- **Field list = the engine's own:** Arcanum.exe contains all 338 `obj_f_*` names (in reverse
+  enum order in the string table; `tools/object_probe/obj_field_names_reversed.txt`). A PC object
+  is three blocks: common `current_aid..pad_i64as_1` (36 fields, bitmap bits 0-35), critter
+  `critter_flags..critter_pad_i64as_1` (33, bits 64-96), pc `pc_flags..pc_pad_i64as_1` (25, bits
+  128-152). `pc_background` = enum 257 = 0x101, as the draw code uses.
+- **Types from names** (`tools/object_probe/fields.py`): `*_idx`, `*ias_*`, `*i64as_*`,
+  `overlay_fore/back`, `underlay`, `overlay_light_*`, `pc_global_flags/variables` = sizeable
+  arrays; `location`, `critter_teleport_dest` = i64; `critter_fleeing_from`, `critter_gold` = object
+  reference (`u8 present` + 24-byte ObjectID); `pc_player_name` = string (`u8 present` + `u32 len`
+  + bytes); everything else i32. With this table **all 12 `.mpc` parse to the exact byte**
+  (`python3 tools/object_probe/walk2.py` from the scratch layout; it reads `players/*.mpc`).
+- **Prototypes (`data/proto/*.pro`) still drift:** header = version · prototype ObjectID (none) ·
+  ObjectID (kind 1, proto number) · `u32 type` · 20-byte bitmap at 56 · fields from 76, and they
+  store *every* field (not just bitmap bits). Common block and critter fields through
+  `effect_cause_idx` decode correctly; from `critter_gold` on it is off by about one byte
+  (likely object references or another field type differ in prototypes). Lugard's background
+  46 / story 1046 sit at offsets 890/894, name as a present-flagged string at 915. Open question
+  for the next step: find the prototype field encoding (REA on the proto read code, or more data).
+- Next: finish prototypes, mount `data/` in the VFS (proto + Players), then the Rust reader.
 
 ## Known issues / backlog (not started)
 
