@@ -61,6 +61,9 @@ pub mod paths {
         /// New Game character picker: portrait box with arrows, four info bars, two description
         /// panels, 800x400.
         pub const PREGEN_BACK: &str = "art/interface/PreGenCharacterBase.ART";
+        /// Previous/next character arrows beside the picker's portrait (art 283/284).
+        pub const PICKER_LEFT: &str = "art/interface/Big_Grn_L.ART";
+        pub const PICKER_RIGHT: &str = "art/interface/Big_Grn_R.ART";
         /// Save list box, portrait socket and screenshot oval (transparent windows), 800x400.
         pub const SAVE_LOAD_BACK: &str = "art/interface/SaveLoadBackground.ART";
         /// Ring over the portrait, 89x89.
@@ -165,6 +168,8 @@ pub mod paths {
         interface::BOTTOM_BAR,
         interface::SAVE_LOAD_BACK,
         interface::PREGEN_BACK,
+        interface::PICKER_LEFT,
+        interface::PICKER_RIGHT,
         interface::SAVE_LOAD_LENS,
         interface::SAVE_SHOT_COVER,
         interface::NEXT_BUTTON,

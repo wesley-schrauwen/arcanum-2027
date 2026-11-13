@@ -1787,7 +1787,7 @@ fn new_game_shows_its_screen_and_goes_back() {
     let mut app = open_new_game_picker(&Fixture::new());
     let world = app.world_mut();
     assert_eq!(world.query::<&NewGameScreen>().iter(world).count(), 1);
-    assert_eq!(world.query::<&NewGameAction>().iter(world).count(), 2, "Back and Next");
+    assert_eq!(world.query::<&NewGameAction>().iter(world).count(), 4, "Back, Next and the two character arrows");
     // The shared frame's hover help works here too.
     let next = {
         let world = app.world_mut();
@@ -1906,4 +1906,73 @@ fn new_game_first_asks_pre_made_or_custom() {
     activate(&mut app, MenuAction::PickCharacter);
     app.update();
     assert_eq!(state(&app), AppState::NewGame);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pre-made character picker
+
+fn sample_premades() -> arcanum_client::premade::PremadeCharacters {
+    use arcanum_client::premade::Premade;
+    let p = |prototype, name: &str, race: &str, gender: &str| Premade {
+        prototype,
+        name: name.into(),
+        race: race.into(),
+        gender: gender.into(),
+        age: 20,
+        level: 1,
+        background: 46,
+        story: format!("{name}\r\n\r\n\tA story about {name}."),
+        portrait: None,
+    };
+    arcanum_client::premade::PremadeCharacters(vec![
+        p(16087, "Merwin", "Halfling", "Male"),
+        p(16094, "Lugard", "Dwarf", "Male"),
+        p(16095, "Victoria", "Human", "Female"),
+    ])
+}
+
+fn picker_text(app: &mut App, which: arcanum_client::new_game::PickerText) -> String {
+    let world = app.world_mut();
+    let e = world.query::<(Entity, &arcanum_client::new_game::PickerText)>().iter(world).find(|(_, t)| **t == which).unwrap().0;
+    texts_in(app, e).remove(0)
+}
+
+#[test]
+fn the_picker_cycles_through_the_characters_and_shows_them() {
+    use arcanum_client::new_game::{ChosenCharacter, PickerIndex, PickerText};
+    let mut app = ready_menu(&Fixture::new());
+    app.insert_resource(sample_premades());
+    activate(&mut app, MenuAction::SinglePlayer);
+    app.update();
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    activate(&mut app, MenuAction::PickCharacter);
+    app.update();
+    app.update();
+    assert_eq!(app.world().resource::<PickerIndex>().0, 0);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Merwin");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(0)), "Male");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(1)), "Halfling");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(2)), "Merwin", "the background's title line");
+    assert_eq!(picker_text(&mut app, PickerText::StatsHeading), "Initial Stats");
+    // The body is the story without its heading line (the fallback font turns the tab into spaces).
+    assert_eq!(picker_text(&mut app, PickerText::StoryBody).trim(), "A story about Merwin.");
+
+    press_new_game(&mut app, NewGameAction::Following);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Lugard");
+    press_new_game(&mut app, NewGameAction::Previous);
+    press_new_game(&mut app, NewGameAction::Previous);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Victoria", "wraps backwards");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(0)), "Female");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(1)), "Human");
+    press_new_game(&mut app, NewGameAction::Following);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Merwin", "and forwards");
+    // Only one character's content at a time.
+    let world = app.world_mut();
+    assert_eq!(world.query::<&arcanum_client::new_game::PickerContent>().iter(world).count(), 1);
+
+    press_new_game(&mut app, NewGameAction::Following);
+    press_new_game(&mut app, NewGameAction::Next);
+    assert_eq!(app.world().resource::<ChosenCharacter>().0, 16094);
+    assert_eq!(state(&app), AppState::Loading);
 }

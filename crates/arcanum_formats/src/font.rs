@@ -231,7 +231,15 @@ impl BitmapFont {
     /// Renders `text` as a block of lines (see [`Self::layout`]), each `line_height` tall. The
     /// block is as wide as `max_width` when given, otherwise as its widest line.
     pub fn render_block(&self, text: &str, max_width: Option<u32>, align: Align) -> RenderedText {
-        let lines = self.layout(text, max_width);
+        self.render_block_limited(text, max_width, align, None)
+    }
+
+    /// Like [`Self::render_block`], keeping at most `max_lines` lines (whole lines only).
+    pub fn render_block_limited(&self, text: &str, max_width: Option<u32>, align: Align, max_lines: Option<usize>) -> RenderedText {
+        let mut lines = self.layout(text, max_width);
+        if let Some(n) = max_lines {
+            lines.truncate(n.max(1));
+        }
         let widths: Vec<u32> = lines.iter().map(|l| l.indent + self.measure(&l.text)).collect();
         let width = max_width.unwrap_or_else(|| widths.iter().copied().max().unwrap_or(0));
         let height = self.line_height * lines.len() as u32;
@@ -343,6 +351,9 @@ mod tests {
         // A fixed width is honoured.
         assert_eq!(f.render_block("a", Some(50), Align::Left).width, 50);
         assert_eq!(f.render_block("", None, Align::Left).height, h, "empty text is one blank line");
+        // A line limit keeps whole lines only.
+        assert_eq!(f.render_block_limited("a\nb\nc", None, Align::Left, Some(2)).height, 2 * h);
+        assert_eq!(f.render_block_limited("a\nb", None, Align::Left, Some(5)).height, 2 * h);
     }
 
     #[test]

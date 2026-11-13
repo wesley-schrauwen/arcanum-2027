@@ -81,10 +81,18 @@ impl ArcanumFonts {
     /// Adds a block of `text` that wraps to `width` logical pixels (and breaks at newlines, with
     /// tab indents), like [`Self::insert_text`].
     pub fn insert_paragraph(&self, entity: &mut EntityCommands, text: &str, font: UiFont, width: f32, align: Align) {
+        self.insert_block(entity, text, font, width, None, align);
+    }
+
+    /// Like [`Self::insert_paragraph`], showing only the whole lines that fit `height` logical
+    /// pixels when given.
+    pub fn insert_block(&self, entity: &mut EntityCommands, text: &str, font: UiFont, width: f32, height: Option<f32>, align: Align) {
         if self.serif.is_none()
             && let Some(bitmap) = self.bitmap(font)
         {
-            entity.insert(BitmapText::new(text, bitmap.clone(), ORIGINAL_SCALE).wrapped(width, align));
+            let mut block = BitmapText::new(text, bitmap.clone(), ORIGINAL_SCALE).wrapped(width, align);
+            block.max_height = height;
+            entity.insert(block);
         } else {
             // Bevy's text wraps to the node's width by itself.
             let justify = match align {

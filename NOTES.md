@@ -38,7 +38,7 @@ Options opens the original options screen (see below).
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50% × Music setting) and hover/click sounds (× Effects). Options arrows use `Button_Medium.wav` on press and `Button_Medium_Release.wav` on release, no hover sound, as in the original (confirmed in Arcanum.exe at 0x57fe60: art 667/668 with sound ids 3000/3001); text buttons keep `MorphText_CLICK.wav`. Voice volume applies to anything spawned with `play_voice`/`VoiceLine` (no voice plays yet). All live. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 208 tests, 180 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 211 tests, 182 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -83,13 +83,14 @@ crates/arcanum_client/           the Bevy game
   src/screens.rs                 ScreensPlugin: placeholder screens (world, Credits), Esc back to the menu
   src/brightness.rs             BrightnessPlugin: gamma pass after the UI (brightness.wgsl)
   src/menu_window.rs             MenuWindowPlugin: shared 800x600 frame, Back/Next, hover help
-  src/new_game.rs                NewGamePlugin: New Game (character picker) scaffold
+  src/new_game.rs                NewGamePlugin: pre-made character picker
+  src/premade.rs                 pre-made characters from their prototypes (name, race, story, portrait)
   src/load_game.rs               LoadGamePlugin: Load Game screen, SaveGames, LoadGameState
   src/loading.rs                 LoadingPlugin: loading screen, LoadRequest, LoadingProgress
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              80 Bevy tests, no window/GPU/game data
+  tests/headless.rs              81 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
@@ -219,7 +220,16 @@ Owner's decision: build it properly (option a), in three steps, each its own PR:
    byte and check names, backgrounds, story ids, portraits, race and gender. The VFS now mounts
    `<ARCANUM_DIR>/data` (loose `proto/`, `Players/`) between the module and the base archives.
    Next object types (NPC, items, ...) need their field blocks and any storage-kind corrections.
-3. **Fill the picker screen** (`new_game.rs`) and go on to character creation.
+3. **Fill the picker screen**: done except the stats. `premade.rs` loads the 12 pre-mades
+   (prototypes 16087-16098) through the VFS; `new_game.rs` shows, as the original does (draw
+   code 0x5458d0 + 0x5448e0, mode flag 0x64c458 = 0 for the picker): bar 1 the name (field
+   0x10e), bar 2 `MainMenu.mes` 740+gender, bar 3 720+race, bar 4 the background title (first
+   line of `gameback.mes`), "Initial Stats" (739) atop the upper-right panel, and the story body
+   (after the first line) wrapped across the whole large panel 0x5c5070, whole lines only. Bar
+   texts centre when they fit (0x542df0). Arrows `Big_Grn_L/R` cycle with wrap; Next stores
+   `ChosenCharacter` (prototype number). Not yet: the stat values in the upper-right panel (loop
+   at 0x544f2b, untraced), story scrolling, fonts/colours (font slots 0x64c210-0x64c21c,
+   near-white; our text uses the small font and INFO_COLOR). Then character creation.
 
 What is known so far:
 - **Screen**: window table entry at Arcanum.exe `0x5c5270` (background art 766

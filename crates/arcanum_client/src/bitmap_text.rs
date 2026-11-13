@@ -82,18 +82,26 @@ pub struct BitmapText {
     /// Wrap to this width, in logical pixels. `None`: lines are as long as their text.
     pub max_width: Option<f32>,
     pub align: Align,
+    /// Show only the lines that fit this height, in logical pixels (whole lines only).
+    pub max_height: Option<f32>,
 }
 
 impl BitmapText {
     /// One block of text in `font`, unwrapped, left-aligned, with a shadow.
     pub fn new(text: impl Into<String>, font: Handle<BitmapFontAsset>, scale: f32) -> Self {
-        Self { text: text.into(), font, scale, shadow: true, max_width: None, align: Align::Left }
+        Self { text: text.into(), font, scale, shadow: true, max_width: None, align: Align::Left, max_height: None }
     }
 
     /// Wraps to `width` logical pixels.
     pub fn wrapped(mut self, width: f32, align: Align) -> Self {
         self.max_width = Some(width);
         self.align = align;
+        self
+    }
+
+    /// Keeps only the lines that fit `height` logical pixels.
+    pub fn clipped_to(mut self, height: f32) -> Self {
+        self.max_height = Some(height);
         self
     }
 
@@ -164,7 +172,9 @@ fn render_bitmap_text(
             continue;
         };
         let wrap = text.wrap_in_font_pixels();
-        let rendered = font.0.render_block(&text.text, wrap, text.align);
+        // Whole lines that fit the height; the shadow adds one font pixel below the last line.
+        let max_lines = text.max_height.map(|h| ((h / text.scale - f32::from(text.shadow)) / font.0.line_height as f32).floor().max(1.0) as usize);
+        let rendered = font.0.render_block_limited(&text.text, wrap, text.align, max_lines);
         let mut entity_commands = commands.entity(entity);
         if rendered.width == 0 {
             node.width = Val::Px(0.0);
