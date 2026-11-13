@@ -15,6 +15,7 @@
 //! (values) and `MainMenu.mes` 4000-4003 (tabs and Done). Resolution, Fullscreen and the
 //! confirmation dialog are new, so their text is English.
 
+use bevy::picking::events::PointerRelease;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ActivateOnPress, Button};
@@ -348,7 +349,8 @@ impl Plugin for OptionsPlugin {
                     .chain()
                     .run_if(in_state(AppState::Options)),
             )
-            .add_observer(on_options_activate);
+            .add_observer(on_options_activate)
+            .add_observer(on_arrow_release);
     }
 }
 
@@ -606,7 +608,12 @@ fn on_options_activate(
         return;
     }
     if let Some(sounds) = &sounds {
-        sounds.play_click(&mut commands);
+        // The arrows are picture buttons and click like them; the text buttons use the menu click.
+        if matches!(action, OptionsAction::Step { .. }) {
+            sounds.play_button_press(&mut commands);
+        } else {
+            sounds.play_click(&mut commands);
+        }
     }
     match action {
         OptionsAction::Tab(t) => {
@@ -659,6 +666,22 @@ fn leave(
             spawn_resolution_dialog(commands, fonts);
         }
         _ => next_state.set(AppState::MainMenu),
+    }
+}
+
+/// Plays the button release sound when an arrow is let go.
+fn on_arrow_release(
+    release: On<PointerRelease>,
+    actions: Query<&OptionsAction>,
+    confirm: Option<Res<ResolutionConfirm>>,
+    sounds: Option<Res<MenuSounds>>,
+    mut commands: Commands,
+) {
+    if confirm.is_some() {
+        return;
+    }
+    if let (Ok(OptionsAction::Step { .. }), Some(sounds)) = (actions.get(release.entity), &sounds) {
+        sounds.play_button_release(&mut commands);
     }
 }
 
