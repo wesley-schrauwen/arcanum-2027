@@ -23,7 +23,8 @@ host-confirmed.
 
 ## 1. Tether and spatial co-location
 
-Players must stay within a **2000-tile radius** of one another. The radius bounds what has to be
+Players must stay within a **tether radius** of one another. The radius is still to be
+determined. The radius bounds what has to be
 streamed and simulated.
 
 - **Single active sector:** the party stays inside one shared envelope. The host therefore
