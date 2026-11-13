@@ -252,7 +252,9 @@ impl ResourcePack {
     /// 2. the module's patch archives `modules/<module>.PATCH*`, highest number first;
     /// 3. the module folder `modules/<module>/` (loose files such as music);
     /// 4. the module archive `modules/<module>.dat`;
-    /// 5. every `.dat` in the game folder.
+    /// 5. the game's loose `data/` folder (prototypes in `proto/`, `Players/`), which the original
+    ///    also reads above its archives;
+    /// 6. every `.dat` in the game folder.
     ///
     /// Missing module pieces are skipped; a missing game folder is an error.
     pub fn open_vfs(&self) -> io::Result<Vfs> {
@@ -271,6 +273,10 @@ impl ResourcePack {
         let module_dat = modules.join(format!("{}.dat", self.module));
         if module_dat.is_file() {
             vfs.mount_archive(module_dat)?;
+        }
+        let data_dir = self.game_dir.join("data");
+        if data_dir.is_dir() {
+            vfs.mount_dir(data_dir);
         }
         vfs.mount_archives_in(&self.game_dir)?;
         Ok(vfs)
@@ -396,6 +402,15 @@ mod tests {
         // A module that does not exist is not an error.
         let vfs = pack(None, "Missing").open_vfs().unwrap();
         assert_eq!(vfs.read("who.txt").unwrap(), b"base");
+
+        // The loose data folder sits above the base archives and below the module.
+        write(&g.join("data/who.txt"), b"data");
+        write(&g.join("data/proto/016094 - PC.pro"), b"proto");
+        let vfs = pack(None, "Missing").open_vfs().unwrap();
+        assert_eq!(vfs.read("who.txt").unwrap(), b"data");
+        assert_eq!(vfs.read("proto/016094 - pc.pro").unwrap(), b"proto");
+        let vfs = pack(None, "Arcanum").open_vfs().unwrap();
+        assert_eq!(vfs.read("who.txt").unwrap(), b"patch1");
     }
 
     #[test]

@@ -38,7 +38,7 @@ Options opens the original options screen (see below).
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50% × Music setting) and hover/click sounds (× Effects). Options arrows use `Button_Medium.wav` on press and `Button_Medium_Release.wav` on release, no hover sound, as in the original (confirmed in Arcanum.exe at 0x57fe60: art 667/668 with sound ids 3000/3001); text buttons keep `MorphText_CLICK.wav`. Voice volume applies to anything spawned with `play_voice`/`VoiceLine` (no voice plays yet). All live. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 200 tests, 174 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 208 tests, 180 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -62,6 +62,7 @@ crates/arcanum_vfs/              game data access, no Bevy dependency
   src/test_util.rs               DatBuilder: writes synthetic .dat files (feature "test-util")
 crates/arcanum_formats/          file format decoders, no Bevy dependency
   src/mes.rs                     MesFile: {id}{text} message files
+  src/object.rs                  Object (prototype/instance), PlayerFile (.mpc); PC field tables
   src/cp1252.rs                  Windows-1252 decode/encode (shared by .mes and fonts)
   src/font.rs                    BitmapFont: glyph lookup, measure, render to a coverage mask
   src/art.rs                     ArtFile: sprites (format notes at top of file)
@@ -88,7 +89,7 @@ crates/arcanum_client/           the Bevy game
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              79 Bevy tests, no window/GPU/game data
+  tests/headless.rs              80 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
@@ -212,9 +213,12 @@ Owner's decision: build it properly (option a), in three steps, each its own PR:
 1. **Multi-line `BitmapText`**: done (wrapping, real/escaped `\n`, `\t` indents, left/centre).
    Checked in a real-game screenshot with Lugard Bloodstone's story in the description panel;
    the full story is taller than the panel, so step 3 needs clipping or scrolling there.
-2. **Object file reader** (`arcanum_formats`): Arcanum's binary object format (`.mpc` pre-made
-   characters; the same format is used by save games and map objects). Needs the field order,
-   worked out from Arcanum.exe. Minimum for the picker: name, race, gender, background, portrait.
+2. **Object file reader**: done for player characters. `arcanum_formats::object`:
+   `Object::parse_prototype` / `parse_instance`, `PlayerFile::parse` (.mpc), field tables generated
+   from the engine names; real-data tests parse all 13 PC prototypes and all 12 `.mpc` to the last
+   byte and check names, backgrounds, story ids, portraits, race and gender. The VFS now mounts
+   `<ARCANUM_DIR>/data` (loose `proto/`, `Players/`) between the module and the base archives.
+   Next object types (NPC, items, ...) need their field blocks and any storage-kind corrections.
 3. **Fill the picker screen** (`new_game.rs`) and go on to character creation.
 
 What is known so far:
