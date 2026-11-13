@@ -19,8 +19,8 @@ at any supported resolution, with the original menu music. Four entries from `Ma
 original hover sound; a click plays the click sound and runs the action. Single Player opens the
 original's Single Player menu on the same panel (New Game, Load Game, Continue, Cancel; the
 original's View Intro is removed and Last Save became Continue, text from `MainMenu.mes` 34). Load
-Game opens the Load Game screen (below); Continue is dimmed and inert until saves exist. New Game goes through the loading
-screen (random original "Loading Arcanum..." picture, pocket watch in the bottom-right corner, one turn every 8 s) to a world placeholder. Credits is a placeholder; Esc returns to the main menu (not from the loading screen). Exit Game quits.
+Game opens the Load Game screen (below); Continue is dimmed and inert until saves exist. New Game opens the New Game screen
+(below), whose Next goes through the loading screen (random original "Loading Arcanum..." picture, pocket watch in the bottom-right corner, one turn every 8 s) to a world placeholder. Credits is a placeholder; Esc returns to the main menu (not from the loading screen). Exit Game quits.
 Options opens the original options screen (see below).
 
 | Area | State |
@@ -30,13 +30,15 @@ Options opens the original options screen (see below).
 | `.art` sprites | Frame decode done (raw + RLE, palettes, 8 rotations). No animation playback. |
 | Bevy integration | Done. VFS is Bevy's default asset source; `.art` → `Image`, `.mes` → `MesAsset`. |
 | Main menu | Interactive: buttons, hover, click, `AppState` transitions. Single Player menu (second level) done; Credits and the world are placeholders. |
+| New Game screen | Scaffold: the original character picker art (`PreGenCharacterBase`) in the shared menu frame (`menu_window.rs`: top/bottom bars, Back/Next, hover help). Back returns to the Single Player menu; Next goes through the loading screen. Portrait, arrows, info bars and panels are art only. |
 | Load Game screen | Original art and layout from Arcanum.exe's screen table (0x5c4560): top bar, `SaveLoadBackground`, bottom bar; Back/Load round buttons, Delete, info toggle, hover help in the bottom bar. Lists `SaveGames` (empty until saving exists; `DEBUG_ARCANUM_SCREEN=loadgame` uses example saves). Load goes through the loading screen to the world placeholder. No portraits/screenshots or delete confirmation yet. |
 | Loading screen | Scaffolded: `LoadRequest { next, assets, min_secs }` + `AppState::Loading`; waits for assets (failures warn and continue) and at least 1.5 s; `LoadingProgress` for a future bar. Shown entering the game only (owner's decision). |
-| Options screen | Original art and text; Game/Video/Sound tabs, arrows on every setting, commit on change. Resolution: arrows pick, Done applies, then "Confirm Resolution" with a 15 s auto-revert. Saved to `config.toml` on leaving the screen. Resolution, fullscreen and the three volumes take effect; the rest are stored only. |
+| Options screen | Original art and text; Game/Video/Sound tabs, arrows on every setting, commit on change. Resolution: arrows pick, Done applies, then "Confirm Resolution" with a 15 s auto-revert. Saved to `config.toml` on leaving the screen. Resolution, fullscreen, brightness and the three volumes take effect; the rest are stored only. |
+| Brightness | A gamma curve over the finished frame (`brightness.rs` + `brightness.wgsl`, Bevy's `FullscreenMaterial` scheduled after `ui_pass`, before `upscaling`), so menus and world both change; colour grading would skip the UI. 0.5 is neutral and pixel-identical; exponent 2^±1 at the ends; black and white stay put. Live. |
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50% × Music setting) and hover/click sounds (× Effects). Options arrows use `Button_Medium.wav` on press and `Button_Medium_Release.wav` on release, no hover sound, as in the original (confirmed in Arcanum.exe at 0x57fe60: art 667/668 with sound ids 3000/3001); text buttons keep `MorphText_CLICK.wav`. Voice volume applies to anything spawned with `play_voice`/`VoiceLine` (no voice plays yet). All live. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 189 tests, 163 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 193 tests, 167 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -78,12 +80,15 @@ crates/arcanum_client/           the Bevy game
   src/options.rs                 OptionsPlugin: Options screen, OptionId/OptionsTab model, resolution confirm
   src/widgets.rs                 WidgetsPlugin: HoverText (+Selected), FrameButton (art-frame buttons)
   src/screens.rs                 ScreensPlugin: placeholder screens (world, Credits), Esc back to the menu
+  src/brightness.rs             BrightnessPlugin: gamma pass after the UI (brightness.wgsl)
+  src/menu_window.rs             MenuWindowPlugin: shared 800x600 frame, Back/Next, hover help
+  src/new_game.rs                NewGamePlugin: New Game (character picker) scaffold
   src/load_game.rs               LoadGamePlugin: Load Game screen, SaveGames, LoadGameState
   src/loading.rs                 LoadingPlugin: loading screen, LoadRequest, LoadingProgress
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              76 Bevy tests, no window/GPU/game data
+  tests/headless.rs              78 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
@@ -105,7 +110,7 @@ cargo test --workspace                              # real-data tests skip witho
 | `ARCANUM_FULLSCREEN` | `1`/`true` for borderless fullscreen. Overrides the saved value for this run only. |
 | `ARCANUM_CONFIG` | Path of the settings file to use instead of `<user config dir>/open-arcanum/config.toml` (macOS: `~/Library/Application Support/open-arcanum/`). |
 | `DEBUG_ARCANUM_SCREENSHOT` | Path; saves the window once the menu (or Options) is ready, then exits. Used to verify rendering. |
-| `DEBUG_ARCANUM_SCREEN` | `options`, `singleplayer`, `loadgame` (with example saves) or `loading` (held for 60 s) opens straight onto that screen (for screenshots). Screenshots are taken 60 frames after the screen is ready; earlier captures came out black. |
+| `DEBUG_ARCANUM_SCREEN` | `options`, `singleplayer`, `newgame`, `loadgame` (with example saves) or `loading` (held for 60 s) opens straight onto that screen (for screenshots). Screenshots are taken 60 frames after the screen is ready; earlier captures came out black. |
 
 ## Format knowledge
 
@@ -172,7 +177,7 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   or 15 s without an answer restores the previous one; either way the menu follows. The rest
   of the screen is locked while the question is up. Settings are saved to `config.toml` when
   the player leaves Options (so only a confirmed or reverted resolution is ever saved); boot order
-  is defaults → file → env vars. The three volumes are live; other settings are stored only for now;
+  is defaults → file → env vars. Brightness and the three volumes are live; other settings are stored only for now;
   English only (a future text manager may hot-swap strings). Tabs: Game = Auto Attack, Combat
   Taunts; Video = Brightness, Text Duration, Floats, Float Speed, Fullscreen, Resolution; Sound = Effects, Voice, Music.
 - UI and camera are authored against a **1080-unit-tall baseline**. The camera is
@@ -215,10 +220,9 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 
 ## Suggested next steps
 
-1. Make the remaining settings take effect: brightness on the camera; the gameplay settings once
-   their systems exist. Dialogue must play voice through `audio::play_voice`.
-2. New Game: the original's character pick / create flow (`MainMenu.mes` 100-102) before the
-   loading screen. Then menu keyboard hotkeys (`MainMenu.mes` 20-24, 60-64).
+1. Make the remaining settings take effect once their systems exist (combat, floating text). Dialogue must play voice through `audio::play_voice`.
+2. New Game: fill the character picker (pre-made characters: portrait, info bars, description;
+   arrows cycle) and add character creation (`CreateCharacterBase`, `CreateYourOwn`). Then menu keyboard hotkeys (`MainMenu.mes` 20-24, 60-64).
 3. Multi-line `BitmapText` (wrapping, alignment) for longer UI text such as credits.
 4. Art id → path mapping via the `.mes` index files, so assets can be loaded by game id.
 5. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.

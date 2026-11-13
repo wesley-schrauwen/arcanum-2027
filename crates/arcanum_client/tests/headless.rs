@@ -20,6 +20,8 @@ use arcanum_client::options::{
 use arcanum_client::loading::{LoadRequest, LoadingIndicator, LoadingPicture, LoadingProgress, LoadingScreen, MIN_LOADING_SECS};
 use arcanum_client::LoadingPlugin;
 use arcanum_client::LoadGamePlugin;
+use arcanum_client::NewGamePlugin;
+use arcanum_client::new_game::{NewGameAction, NewGameScreen};
 use arcanum_client::load_game::{
     HoverHelpText, LoadGameAction, LoadGameScreen, LoadGameState, NO_SAVES, SaveGames, SaveInfo, SaveRow, sample_saves,
 };
@@ -288,7 +290,7 @@ fn menu_app(vfs: Vfs) -> App {
         .init_asset::<Font>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<GameSettings>()
-        .add_plugins((TimePlugin, BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, OptionsPlugin, ScreensPlugin, LoadingPlugin, LoadGamePlugin))
+        .add_plugins((TimePlugin, BitmapTextPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, OptionsPlugin, ScreensPlugin, LoadingPlugin, LoadGamePlugin, NewGamePlugin))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
     app
 }
@@ -757,6 +759,8 @@ fn cancel_and_escape_return_to_the_main_menu() {
 fn new_game_goes_through_the_loading_screen_into_the_world() {
     let mut app = open_single_player(&Fixture::new());
     activate(&mut app, MenuAction::NewGame);
+    assert_eq!(state(&app), AppState::NewGame);
+    press_new_game(&mut app, NewGameAction::Next);
     assert_eq!(state(&app), AppState::Loading);
     assert!(buttons(&mut app).is_empty());
     let world = app.world_mut();
@@ -1764,4 +1768,74 @@ fn hovering_a_button_shows_its_help_in_the_bottom_bar() {
     app.world_mut().entity_mut(delete).insert(Hovered(false));
     app.update();
     assert_eq!(help(&mut app), "");
+}
+
+// ---------------------------------------------------------------------------------------------
+// New Game screen
+
+fn press_new_game(app: &mut App, action: NewGameAction) {
+    let entity = {
+        let world = app.world_mut();
+        world.query::<(Entity, &NewGameAction)>().iter(world).find(|(_, a)| **a == action).map(|(e, _)| e).unwrap()
+    };
+    app.world_mut().trigger(Activate { entity });
+    app.update();
+    app.update();
+}
+
+#[test]
+fn new_game_shows_its_screen_and_goes_back() {
+    let mut app = open_single_player(&Fixture::new());
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    let world = app.world_mut();
+    assert_eq!(world.query::<&NewGameScreen>().iter(world).count(), 1);
+    assert_eq!(world.query::<&NewGameAction>().iter(world).count(), 2, "Back and Next");
+    // The shared frame's hover help works here too.
+    let next = {
+        let world = app.world_mut();
+        world.query::<(Entity, &NewGameAction)>().iter(world).find(|(_, a)| **a == NewGameAction::Next).unwrap().0
+    };
+    app.world_mut().entity_mut(next).insert(Hovered(true));
+    app.update();
+    let help = {
+        let world = app.world_mut();
+        world.query_filtered::<Entity, With<HoverHelpText>>().single(world).unwrap()
+    };
+    assert_eq!(texts_in(&mut app, help), ["Next Screen"]);
+
+    press_new_game(&mut app, NewGameAction::Back);
+    assert_eq!(state(&app), AppState::SinglePlayer);
+    let world = app.world_mut();
+    assert_eq!(world.query::<&NewGameScreen>().iter(world).count(), 0);
+
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::SinglePlayer, "Escape goes back too");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Brightness
+
+#[test]
+fn brightness_follows_the_setting_on_the_camera() {
+    use arcanum_client::brightness::{Brightness, brightness_exponent};
+    let fx = Fixture::new();
+    let mut app = menu_app(fx.vfs());
+    app.add_plugins(arcanum_client::BrightnessPlugin);
+    app.insert_resource(GameSettings { brightness: 0.2, ..default() });
+    run_until_menu_ready(&mut app);
+    app.update();
+    let exponent = |app: &mut App| {
+        let world = app.world_mut();
+        world.query_filtered::<&Brightness, With<Camera2d>>().single(world).unwrap().exponent
+    };
+    assert_eq!(exponent(&mut app), brightness_exponent(0.2));
+    assert!(exponent(&mut app) > 1.0, "below the middle darkens");
+
+    app.world_mut().resource_mut::<GameSettings>().brightness = 0.9;
+    app.update();
+    assert_eq!(exponent(&mut app), brightness_exponent(0.9));
+    assert!(exponent(&mut app) < 1.0, "above the middle lightens");
 }

@@ -3,12 +3,13 @@ use std::sync::{Arc, RwLock};
 use arcanum_client::main_menu::{MenuLabel, FitToBaseline};
 use arcanum_client::options::OptionSlot;
 use arcanum_client::{
-    ArcanumAssetsPlugin, BitmapTextPlugin, ConfigPlugin, DisplayPlugin, FontsPlugin, LoadGamePlugin, LoadingPlugin, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
+    ArcanumAssetsPlugin, BitmapTextPlugin, BrightnessPlugin, ConfigPlugin, DisplayPlugin, FontsPlugin, LoadGamePlugin, LoadingPlugin, NewGamePlugin, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
     OptionsPlugin, ScreensPlugin, VfsAssetPlugin,
 };
 use arcanum_client::AppState;
 use arcanum_client::config;
 use arcanum_client::load_game::{LoadGameScreen, sample_saves};
+use arcanum_client::new_game::NewGameScreen;
 use arcanum_client::loading::{LoadRequest, LoadingPicture};
 use arcanum_client::settings::EnvOverrides;
 use bevy::prelude::*;
@@ -17,7 +18,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 /// Debugging aid: when set to a file path, saves the window there once the menu has loaded,
 /// then exits.
 const SCREENSHOT_VAR: &str = "DEBUG_ARCANUM_SCREENSHOT";
-/// Debugging aid: `options`, `singleplayer`, `loadgame` or `loading` opens that screen instead of
+/// Debugging aid: `options`, `singleplayer`, `newgame`, `loadgame` or `loading` opens that screen instead of
 /// the main menu.
 const SCREEN_VAR: &str = "DEBUG_ARCANUM_SCREEN";
 
@@ -50,21 +51,24 @@ fn main() {
         .add_plugins((
             ArcanumAssetsPlugin,
             BitmapTextPlugin,
+            BrightnessPlugin,
             ConfigPlugin,
             DisplayPlugin,
             FontsPlugin,
             LoadGamePlugin,
             LoadingPlugin,
+            NewGamePlugin,
             MenuAudioPlugin,
             MainMenuPlugin,
             OptionsPlugin,
             ScreensPlugin,
         ));
 
-    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options|singleplayer|loadgame|loading` opens that screen.
+    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options|singleplayer|newgame|loadgame|loading` opens that screen.
     let start = match std::env::var(SCREEN_VAR).unwrap_or_default().to_ascii_lowercase().as_str() {
         "options" => Some(AppState::Options),
         "singleplayer" => Some(AppState::SinglePlayer),
+        "newgame" => Some(AppState::NewGame),
         // With example saves, so the list and info display have something to show.
         "loadgame" => {
             app.insert_resource(sample_saves());
@@ -118,8 +122,9 @@ fn screen_ready(
     pending: Query<(), With<FitToBaseline>>,
     loading: Query<&ImageNode, With<LoadingPicture>>,
     load_game: Query<(), With<LoadGameScreen>>,
+    new_game: Query<(), With<NewGameScreen>>,
     images: Res<Assets<Image>>,
 ) -> bool {
     let loading_up = loading.iter().any(|p| images.get(&p.image).is_some());
-    (!labels.is_empty() || !slots.is_empty() || loading_up || !load_game.is_empty()) && pending.is_empty()
+    (!labels.is_empty() || !slots.is_empty() || loading_up || !load_game.is_empty() || !new_game.is_empty()) && pending.is_empty()
 }
