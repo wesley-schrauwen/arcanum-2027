@@ -234,9 +234,35 @@ What is known so far:
   550-562: global flag set when each is picked (550 = create your own, -1). Stories: background
   number -> `Rules/backgrnd.mes` (pre-mades at 390-500, first line = description id 1039-1050)
   -> `mes/gameback.mes` (title line + paragraphs with tab indents).
-- `.mpc` header seen: `8a 02 00 00` `77 00 00 00` (version 0x77), then ids and the object's GUID
-  (matches the file name), then a field bitmap and fields; sizeable arrays appear as
-  `01 04 00 00 00 <count> 00 00 00 <id> ...`.
+- **Object format, confirmed on all 12 `Players/*.mpc` (each parses to the exact byte):**
+  - `.mpc` = `u32 object_len`, the object (`object_len` bytes), then two strings: the auto-level
+    scheme and the character's **name** (the name is not an object field there).
+  - Object (instance) = `u32 version` (0x77) · prototype ObjectID (24 bytes) · ObjectID (24) ·
+    `u32 type` (15 = PC) · `u16 stored field count` · field bitmap (5 × u32 = 160 bits for a PC;
+    popcount = the count) · values for the set bits, in bit order.
+  - ObjectID (24 bytes) = `u16 kind` (-1 none, 1 prototype, 2 GUID) · `u16 pad` · `u32 pad` ·
+    16-byte payload (prototype number in the first u32, or the GUID). Pre-mades point at
+    prototypes 16087-16098; their GUIDs match the file names.
+  - Bitmap bits are grouped by 64: 0-63 common object fields, 64-127 critter, 128-191 PC.
+  - Value encodings: `i32` = 4 bytes. `i64` = `u8 present` + 8 bytes if present. Sizeable array
+    = `u8 present`; if present `u32 elem_size` · `u32 count` · `u32 array_id` · `count * elem_size`
+    bytes · bitset (`u32 n` then `n` × u32). Strings (in the trailer) = `u32 len` incl. the NUL ·
+    bytes.
+  - Types seen per bit: i32: 0, 2, 3, 13, 18, 19, 26, 28, 64, 65, 70, 72, 76, 85, 89, 128.
+    i64: 1 (location), 78, 83, 87, 88. Arrays: 5, 6, 16, 66, 67, 68, 69, 74, 75, 84 (24-byte
+    elements: object ids), 130, 131, 134-138, 140, 147, 148 (empty in these files).
+  - Bit 66 = base stats (28): 0-7 ST DX CN BE IN PE WP CH, 17 level, 25 age, 26 gender (1 male,
+    0 female), 27 race (0 human, 1 dwarf, 2 elf, 3 half-elf, 4 gnome, 5 halfling, 6 half-orc,
+    7 half-ogre). 67 basic skills (12), 68 tech skills (4), 69 spell/tech (25). 74/75 look like
+    effects and their causes (race effect 64-71; 330 with cause 9 on some).
+- **Background lives in the prototypes, not the `.mpc`:** the game install has loose prototypes
+  in `<ARCANUM_DIR>/data/proto/` (1423 files: `016086-016098 - PC.pro`, NPCs, items, ...). This
+  folder is **not mounted by our VFS yet**. Lugard's prototype (`016094 - PC.pro`, 954 bytes)
+  contains 46 (background; `Rules/backgrnd.mes` 460) and 1046 (story id, `mes/gameback.mes`)
+  next to each other, plus his name. Prototype header: version 0x77 · prototype ObjectID (none,
+  kind -1) · ObjectID (kind 1, proto 16094) · `u32 type` · `u16 0x11` · bitmap; but the popcount
+  of a 5-word bitmap is 18, not 17, so the prototype field encoding still needs working out.
+- Next: decode prototypes, mount `data/` in the VFS (proto + Players), then the Rust reader.
 
 ## Known issues / backlog (not started)
 
