@@ -46,13 +46,16 @@ pub struct VoiceLine;
 pub struct MenuSounds {
     pub hover: Option<Handle<AudioSource>>,
     pub click: Option<Handle<AudioSource>>,
+    /// Picture buttons (the Options arrows): one sound on press, one on release.
+    pub button_press: Option<Handle<AudioSource>>,
+    pub button_release: Option<Handle<AudioSource>>,
     /// The Effects volume, kept in step with [`GameSettings`].
     pub volume: Volume,
 }
 
 impl Default for MenuSounds {
     fn default() -> Self {
-        Self { hover: None, click: None, volume: Volume::Linear(1.0) }
+        Self { hover: None, click: None, button_press: None, button_release: None, volume: Volume::Linear(1.0) }
     }
 }
 
@@ -63,6 +66,14 @@ impl MenuSounds {
 
     pub fn play_click(&self, commands: &mut Commands) {
         self.play_once(commands, self.click.as_ref());
+    }
+
+    pub fn play_button_press(&self, commands: &mut Commands) {
+        self.play_once(commands, self.button_press.as_ref());
+    }
+
+    pub fn play_button_release(&self, commands: &mut Commands) {
+        self.play_once(commands, self.button_release.as_ref());
     }
 
     /// Spawns a one-shot effect at the Effects volume that despawns itself when it finishes.
@@ -114,6 +125,12 @@ fn setup_audio(
     }
     if exists(sound::MENU_CLICK) {
         sounds.click = Some(assets.load(sound::MENU_CLICK));
+    }
+    if exists(sound::BUTTON_PRESS) {
+        sounds.button_press = Some(assets.load(sound::BUTTON_PRESS));
+    }
+    if exists(sound::BUTTON_RELEASE) {
+        sounds.button_release = Some(assets.load(sound::BUTTON_RELEASE));
     }
     if exists(sound::MAIN_MENU_MUSIC) {
         commands.spawn((

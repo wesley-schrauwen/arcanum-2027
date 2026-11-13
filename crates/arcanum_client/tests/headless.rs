@@ -11,7 +11,7 @@ use arcanum_client::settings::EnvOverrides;
 use arcanum_client::bitmap_text::{BitmapFontAsset, BitmapText, BitmapTextRendered, compose_rgba};
 use arcanum_client::fonts::{ArcanumFonts, ORIGINAL_SCALE};
 use arcanum_client::main_menu::{
-    HOVER_COLOR, MENU_ENTRY_IDS, MenuAction, MenuLabel, OnMainMenu, TEXT_COLOR, menu_ready,
+    DISABLED_COLOR, HOVER_COLOR, MENU_ENTRY_IDS, MenuAction, MenuLabel, OnMainMenu, TEXT_COLOR, menu_ready,
 };
 use arcanum_client::options::{
     CurrentTab, KEEP_RESOLUTION_TITLE, OptionId, OptionSlot, OptionValue, OptionsAction, OptionsScreen, OptionsTab, ResolutionConfirm,
@@ -51,7 +51,7 @@ use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
 // ---------------------------------------------------------------------------------------------
 // Fixtures
 
-const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n{4000}{Gameplay}{4001}{Picture}{4002}{Audio}{4003}{Finished}\r\n";
+const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n{34}{Onward}{50}{Begin}{51}{Resume}{52}{Latest}{53}{Movie}{54}{Back}\r\n{4000}{Gameplay}{4001}{Picture}{4002}{Audio}{4003}{Finished}\r\n";
 
 /// An 8x6 static sprite whose pixel at index `i` uses palette index `i % 256`.
 fn menu_art_indices() -> Vec<u8> {
@@ -344,7 +344,7 @@ fn main_menu_spawns_camera_background_and_labels() {
     // Labels: one per entry, in id order, text from the .mes file.
     let expected: Vec<(u32, String)> = MENU_ENTRY_IDS
         .into_iter()
-        .zip(["Play", "Online", "Settings", "Thanks", "Quit"])
+        .zip(["Play", "Settings", "Thanks", "Quit"])
         .map(|(id, t)| (id, t.to_string()))
         .collect();
     assert_eq!(label_order(&mut app), expected);
@@ -392,7 +392,7 @@ fn main_menu_survives_missing_background() {
     let fx = Fixture::with_archive(DatBuilder::new().raw(paths::text::MAIN_MENU, MENU_MES));
     let mut app = menu_app(fx.vfs());
     update_until(&mut app, |app| !label_order(app).is_empty());
-    assert_eq!(label_order(&mut app).len(), 5);
+    assert_eq!(label_order(&mut app).len(), 4);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -598,7 +598,7 @@ fn menu_entries_are_buttons_in_order() {
     let actions: Vec<MenuAction> = buttons(&mut app).into_iter().map(|(_, a)| a).collect();
     assert_eq!(
         actions,
-        [MenuAction::SinglePlayer, MenuAction::MultiPlayer, MenuAction::Options, MenuAction::Credits, MenuAction::ExitGame]
+        [MenuAction::SinglePlayer, MenuAction::Options, MenuAction::Credits, MenuAction::ExitGame]
     );
     for (button, _) in buttons(&mut app) {
         let world = app.world();
@@ -633,10 +633,7 @@ fn hovering_highlights_only_that_entry() {
 #[test]
 fn entries_open_their_screen_and_escape_returns() {
     let mut app = ready_menu(&Fixture::new());
-    for (action, target, title) in [
-        (MenuAction::SinglePlayer, AppState::SinglePlayer, "Play"),
-        (MenuAction::Credits, AppState::Credits, "Thanks"),
-    ] {
+    for (action, target, title) in [(MenuAction::Credits, AppState::Credits, "Thanks")] {
         activate(&mut app, action);
         assert_eq!(state(&app), target);
         // The main menu's buttons are gone; the placeholder shows its title from MainMenu.mes.
@@ -650,7 +647,7 @@ fn entries_open_their_screen_and_escape_returns() {
         press_escape(&mut app);
         assert_eq!(state(&app), AppState::MainMenu);
         assert!(texts_under::<PlaceholderScreen>(&mut app).is_empty());
-        assert_eq!(label_order(&mut app).len(), 5, "menu rebuilt after {action:?}");
+        assert_eq!(label_order(&mut app).len(), 4, "menu rebuilt after {action:?}");
     }
 }
 
@@ -659,7 +656,7 @@ fn escape_on_the_main_menu_does_nothing() {
     let mut app = ready_menu(&Fixture::new());
     press_escape(&mut app);
     assert_eq!(state(&app), AppState::MainMenu);
-    assert_eq!(buttons(&mut app).len(), 5);
+    assert_eq!(buttons(&mut app).len(), 4);
 }
 
 #[test]
@@ -671,13 +668,98 @@ fn exit_game_requests_app_exit() {
 }
 
 #[test]
-fn multiplayer_stays_on_the_menu() {
+fn there_is_no_multiplayer_entry() {
     let mut app = ready_menu(&Fixture::new());
-    activate(&mut app, MenuAction::MultiPlayer);
+    let texts: Vec<String> = label_order(&mut app).into_iter().map(|(_, t)| t).collect();
+    assert!(!texts.iter().any(|t| t == "Online"), "{texts:?}");
+    assert!(!label_order(&mut app).iter().any(|(id, _)| *id == 11));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Single Player menu
+
+fn open_single_player(fx: &Fixture) -> App {
+    let mut app = ready_menu(fx);
+    activate(&mut app, MenuAction::SinglePlayer);
+    app.update();
+    app
+}
+
+#[test]
+fn single_player_shows_its_menu_on_the_same_panel() {
+    let mut app = open_single_player(&Fixture::new());
+    assert_eq!(state(&app), AppState::SinglePlayer);
+    assert_eq!(
+        label_order(&mut app),
+        [(50, "Begin"), (51, "Resume"), (34, "Onward"), (54, "Back")]
+            .map(|(id, t)| (id, t.to_string()))
+    );
+    let actions: Vec<MenuAction> = buttons(&mut app).into_iter().map(|(_, a)| a).collect();
+    assert_eq!(
+        actions,
+        [MenuAction::NewGame, MenuAction::LoadGame, MenuAction::Continue, MenuAction::Cancel]
+    );
+    // The background stays; the main menu entries are gone.
+    let world = app.world_mut();
+    assert_eq!(world.query::<&Sprite>().iter(world).count(), 1);
+    assert!(!label_order(&mut app).iter().any(|(id, _)| *id == 10));
+    // View Intro and Last Save are not offered.
+    let texts: Vec<String> = label_order(&mut app).into_iter().map(|(_, t)| t).collect();
+    assert!(!texts.iter().any(|t| t == "Movie" || t == "Latest"), "{texts:?}");
+}
+
+#[test]
+fn unbuilt_single_player_entries_are_dimmed_and_inert() {
+    let mut app = open_single_player(&Fixture::new());
+    for (button, action) in buttons(&mut app) {
+        let world = app.world();
+        if action.is_available() {
+            assert!(world.get::<Button>(button).is_some(), "{action:?}");
+            assert_eq!(label_color(&mut app, button), TEXT_COLOR, "{action:?}");
+        } else {
+            assert!(world.get::<Button>(button).is_none(), "{action:?}");
+            assert!(world.get::<Hovered>(button).is_none(), "{action:?}: no hover highlight or sound");
+            assert_eq!(label_color(&mut app, button), DISABLED_COLOR, "{action:?}");
+        }
+    }
+    let available: Vec<MenuAction> =
+        buttons(&mut app).into_iter().map(|(_, a)| a).filter(|a| a.is_available()).collect();
+    assert_eq!(available, [MenuAction::NewGame, MenuAction::Cancel]);
+
+    // Even if triggered, they do nothing.
+    activate(&mut app, MenuAction::LoadGame);
+    app.update();
+    assert_eq!(state(&app), AppState::SinglePlayer);
+}
+
+#[test]
+fn cancel_and_escape_return_to_the_main_menu() {
+    let mut app = open_single_player(&Fixture::new());
+    activate(&mut app, MenuAction::Cancel);
     app.update();
     assert_eq!(state(&app), AppState::MainMenu);
-    assert_eq!(buttons(&mut app).len(), 5);
-    assert!(app.should_exit().is_none());
+    assert_eq!(label_order(&mut app).len(), 4);
+
+    activate(&mut app, MenuAction::SinglePlayer);
+    app.update();
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::MainMenu);
+    assert_eq!(label_order(&mut app).len(), 4);
+}
+
+#[test]
+fn new_game_opens_a_placeholder_and_escape_goes_back_one_level() {
+    let mut app = open_single_player(&Fixture::new());
+    activate(&mut app, MenuAction::NewGame);
+    assert_eq!(state(&app), AppState::NewGame);
+    assert!(buttons(&mut app).is_empty());
+    assert_eq!(texts_under::<PlaceholderScreen>(&mut app), ["Begin", RETURN_HINT]);
+
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::SinglePlayer);
+    assert_eq!(label_order(&mut app).len(), 4, "Single Player menu rebuilt");
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::MainMenu);
 }
 
 /// Entities playing `handle` once and despawning afterwards.
@@ -761,7 +843,7 @@ fn override_font_is_used_for_labels() {
     let mut app = ready_menu(&fx);
     let serif = app.world().resource::<ArcanumFonts>().serif.clone().expect("font handle");
     let fonts = label_fonts(&mut app);
-    assert_eq!(fonts.len(), 5);
+    assert_eq!(fonts.len(), 4);
     assert!(fonts.iter().all(|f| matches!(f, FontSource::Handle(h) if *h == serif)));
 }
 
@@ -888,7 +970,7 @@ fn override_ttf_takes_priority_over_bitmap_fonts() {
         app.update();
     }
     let world = app.world_mut();
-    assert_eq!(world.query_filtered::<(), (With<MenuLabel>, With<Text>)>().iter(world).count(), 5);
+    assert_eq!(world.query_filtered::<(), (With<MenuLabel>, With<Text>)>().iter(world).count(), 4);
     assert_eq!(world.query_filtered::<(), With<BitmapText>>().iter(world).count(), 0);
 }
 
@@ -904,12 +986,12 @@ fn broken_bitmap_font_falls_back_to_plain_text() {
     let mut app = ready_menu(&fx);
     update_until(&mut app, |app| {
         let world = app.world_mut();
-        world.query_filtered::<(), (With<MenuLabel>, With<Text>)>().iter(world).count() == 5
+        world.query_filtered::<(), (With<MenuLabel>, With<Text>)>().iter(world).count() == 4
     });
     let world = app.world_mut();
     assert_eq!(world.query_filtered::<(), (With<MenuLabel>, With<BitmapText>)>().iter(world).count(), 0);
     // The words survive the fallback.
-    assert_eq!(label_order(&mut app).iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["Play", "Online", "Settings", "Thanks", "Quit"]);
+    assert_eq!(label_order(&mut app).iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["Play", "Settings", "Thanks", "Quit"]);
 }
 
 #[test]
@@ -1323,14 +1405,24 @@ fn arrow_buttons_show_hover_and_pressed_frames() {
 }
 
 #[test]
-fn option_buttons_click() {
+fn arrows_use_the_button_sound_and_text_buttons_the_menu_click() {
     let fx = options_fixture();
-    fx.override_file(paths::sound::MENU_CLICK, b"x");
+    for path in [paths::sound::MENU_CLICK, paths::sound::BUTTON_PRESS, paths::sound::BUTTON_RELEASE] {
+        fx.override_file(path, b"x");
+    }
     let mut app = open_options(&fx);
-    let click = app.world().resource::<MenuSounds>().click.clone().unwrap();
-    let before = one_shots(&mut app, &click);
+    let sounds = app.world().resource::<MenuSounds>().clone();
+    let (click, button) = (sounds.click.unwrap(), sounds.button_press.unwrap());
+    assert!(sounds.button_release.is_some());
+    let (clicks, buttons) = (one_shots(&mut app, &click), one_shots(&mut app, &button));
+
     press(&mut app, OptionsAction::Step { option: OptionId::AutoAttack, delta: 1 });
-    assert_eq!(one_shots(&mut app, &click), before + 1);
+    assert_eq!(one_shots(&mut app, &button), buttons + 1, "arrow: the button press sound");
+    assert_eq!(one_shots(&mut app, &click), clicks, "arrow: not the menu click");
+
+    press(&mut app, OptionsAction::Tab(OptionsTab::Sound));
+    assert_eq!(one_shots(&mut app, &click), clicks + 1, "tab: menu click");
+    assert_eq!(one_shots(&mut app, &button), buttons + 1);
 }
 
 #[test]

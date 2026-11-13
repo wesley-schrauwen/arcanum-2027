@@ -120,6 +120,11 @@ pub mod paths {
         /// Menu text hover and click (ids 3026 and 3027 in `sound/snd_interface.mes`).
         pub const MENU_HOVER: &str = "sound/MorphText_HOVER.wav";
         pub const MENU_CLICK: &str = "sound/MorphText_CLICK.wav";
+        /// Picture-button press and release (ids 3000 and 3001), used by the Options arrows. The
+        /// original's slider arrows (`SldrButt_L_Arrow`/`SldrButt_R_Arrow`, interface art 667/668)
+        /// use these, with no hover sound (Arcanum.exe around 0x57fe60).
+        pub const BUTTON_PRESS: &str = "sound/Button_Medium.wav";
+        pub const BUTTON_RELEASE: &str = "sound/Button_Medium_Release.wav";
     }
 
     /// Every file path above, for checks.
@@ -145,6 +150,8 @@ pub mod paths {
         sound::MAIN_MENU_MUSIC,
         sound::MENU_HOVER,
         sound::MENU_CLICK,
+        sound::BUTTON_PRESS,
+        sound::BUTTON_RELEASE,
         fonts::LARGE,
         fonts::SMALL,
     ];

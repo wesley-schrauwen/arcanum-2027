@@ -1,6 +1,8 @@
 //! Placeholder screens for the menu destinations that are not built yet (Options has its own
-//! screen in [`crate::options`]). Each shows its title
-//! (from `MainMenu.mes`) on the menu panel; Escape returns to the main menu.
+//! screen in [`crate::options`]). Each shows its title (from `MainMenu.mes`) on the menu panel.
+//!
+//! Escape goes back one level: New Game to the Single Player menu, the Single Player menu and
+//! Credits to the main menu.
 
 use bevy::prelude::*;
 
@@ -13,7 +15,7 @@ use crate::mes_loader::MesAsset;
 pub struct PlaceholderScreen(pub AppState);
 
 /// Placeholder screens with the `MainMenu.mes` id of their title.
-const PLACEHOLDERS: [(AppState, u32); 2] = [(AppState::SinglePlayer, 10), (AppState::Credits, 13)];
+const PLACEHOLDERS: [(AppState, u32); 2] = [(AppState::NewGame, 50), (AppState::Credits, 13)];
 
 /// Shown under the title. Not from the game's text, so English only for now.
 pub const RETURN_HINT: &str = "Press Esc to return";
@@ -60,8 +62,20 @@ fn spawn_placeholder(
         });
 }
 
-fn return_to_menu(keys: Option<Res<ButtonInput<KeyCode>>>, mut next_state: ResMut<NextState<AppState>>) {
+/// The screen Escape goes back to from `state`.
+pub fn back_from(state: AppState) -> AppState {
+    match state {
+        AppState::NewGame => AppState::SinglePlayer,
+        _ => AppState::MainMenu,
+    }
+}
+
+fn return_to_menu(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    state: Res<State<AppState>>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
     if keys.is_some_and(|k| k.just_pressed(KeyCode::Escape)) {
-        next_state.set(AppState::MainMenu);
+        next_state.set(back_from(*state.get()));
     }
 }

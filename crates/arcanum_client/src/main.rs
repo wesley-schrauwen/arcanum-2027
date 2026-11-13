@@ -15,7 +15,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 /// Debugging aid: when set to a file path, saves the window there once the menu has loaded,
 /// then exits.
 const SCREENSHOT_VAR: &str = "DEBUG_ARCANUM_SCREENSHOT";
-/// Debugging aid: `options` opens the Options screen instead of the main menu.
+/// Debugging aid: `options` or `singleplayer` opens that screen instead of the main menu.
 const SCREEN_VAR: &str = "DEBUG_ARCANUM_SCREEN";
 
 fn main() {
@@ -56,9 +56,14 @@ fn main() {
             ScreensPlugin,
         ));
 
-    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options` opens straight onto the Options screen.
-    if std::env::var(SCREEN_VAR).is_ok_and(|v| v.eq_ignore_ascii_case("options")) {
-        app.add_systems(Startup, |mut next: ResMut<NextState<AppState>>| next.set(AppState::Options));
+    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options|singleplayer` opens straight onto that screen.
+    let start = match std::env::var(SCREEN_VAR).unwrap_or_default().to_ascii_lowercase().as_str() {
+        "options" => Some(AppState::Options),
+        "singleplayer" => Some(AppState::SinglePlayer),
+        _ => None,
+    };
+    if let Some(start) = start {
+        app.add_systems(Startup, move |mut next: ResMut<NextState<AppState>>| next.set(start));
     }
 
     if let Ok(path) = std::env::var(SCREENSHOT_VAR) {
