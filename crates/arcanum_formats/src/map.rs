@@ -156,6 +156,12 @@ impl MapProperties {
     pub fn contains(&self, loc: TileLoc) -> bool {
         (loc.x as u64) < self.width && (loc.y as u64) < self.height
     }
+
+    /// The sector holding `loc`, or `None` when `loc` is outside the map.
+    /// Entry point for map-relative lookups; `TileLoc::sector` does no bounds check.
+    pub fn sector_of(&self, loc: TileLoc) -> Option<SectorId> {
+        self.contains(loc).then(|| loc.sector())
+    }
 }
 
 #[cfg(test)]
@@ -219,7 +225,7 @@ mod tests {
 
     #[test]
     fn bad_map_entry_is_an_error() {
-        for text in [&b"{5099}{Broken, abc, 3}"[..], b"{5099}{Broken, 1}", b"{5099}{, 1, 2}", b"{5099}{M, 1, 2, Area: x}"] {
+        for text in [&b"{5099}{Broken, abc, 3}"[..], b"{5099}{Broken, 1}", b"{5099}{, 1, 2}", b"{5099}{M, 1, 2, Area: x}", b"{5099}{M, 1, 2, WorldMap: x}"] {
             let mes = MesFile::parse(text).unwrap();
             assert!(matches!(parse_map_list(&mes), Err(MapError::BadEntry { id: 5099, .. })), "{text:?}");
         }
@@ -233,6 +239,14 @@ mod tests {
         assert!(!p.contains(TileLoc { x: 128_000, y: 0 }));
         assert!(!p.contains(TileLoc { x: 0, y: 128_000 }));
         assert!(matches!(MapProperties::parse(&[0; 23]), Err(MapError::Truncated { .. })));
+    }
+
+    #[test]
+    fn sector_of_checks_bounds() {
+        let p = MapProperties { base_terrain: 2, unknown: 1, width: 128_000, height: 128_000 };
+        assert_eq!(p.sector_of(TileLoc { x: 92958, y: 82592 }), Some(SectorId::new(1452, 1290)));
+        assert_eq!(p.sector_of(TileLoc { x: 128_000, y: 0 }), None);
+        assert_eq!(p.sector_of(TileLoc { x: 0, y: 128_000 }), None);
     }
 
     #[test]
