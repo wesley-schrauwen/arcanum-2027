@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ActivateOnPress, Button};
 
 use crate::audio::MenuSounds;
-use crate::fonts::ArcanumFonts;
+use crate::fonts::{ArcanumFonts, ORIGINAL_SCALE, UiFont};
 use crate::mes_loader::MesAsset;
 use crate::resource_pack::paths::{backgrounds, text};
 use crate::settings::BASELINE_HEIGHT;
@@ -50,23 +50,23 @@ pub const MENU_ENTRIES: [(u32, MenuAction); 5] = [
 /// Message ids of [`MENU_ENTRIES`], in order.
 pub const MENU_ENTRY_IDS: [u32; 5] = [10, 11, 12, 13, 14];
 
-/// Classic dimmed gold for menu text, and the brighter gold for the hovered entry.
-pub const TEXT_COLOR: Color = Color::srgb(0.75, 0.65, 0.45);
-pub const HOVER_COLOR: Color = Color::srgb(1.0, 0.9, 0.7);
+/// Menu text in the original's dark red, and the much brighter red of the hovered entry.
+/// Measured from the solid strokes in screenshots of the original Single Player menu
+/// ("Load Game" unhovered, "New Game" hovered).
+pub const TEXT_COLOR: Color = Color::srgb_u8(96, 28, 20);
+pub const HOVER_COLOR: Color = Color::srgb_u8(184, 48, 33);
 
 // Layout, measured on the original 800x600 art (pixels from its top-left corner), then scaled to
 // the 1080 baseline. Replacement art with a different layout needs new numbers here.
-const ART_HEIGHT: f32 = 600.0;
-const ART_SCALE: f32 = BASELINE_HEIGHT / ART_HEIGHT;
+const ART_SCALE: f32 = ORIGINAL_SCALE;
 /// Horizontal centre of the framed panel, relative to the middle of the art.
 pub(crate) const PANEL_CENTER_OFFSET_X: f32 = 12.0 * ART_SCALE;
 pub(crate) const PANEL_WIDTH: f32 = 400.0 * ART_SCALE;
 const ROW_HEIGHT: f32 = 55.0 * ART_SCALE;
 /// Top of the first row.
 pub(crate) const PANEL_TOP: f32 = (145.0 - 55.0 / 2.0) * ART_SCALE;
-pub(crate) const FONT_SIZE: f32 = 26.0 * ART_SCALE;
 
-/// The text node inside a menu button, tagged with its message id.
+/// A menu entry's text, tagged with its message id. The text entity is also the button.
 #[derive(Component)]
 pub struct MenuLabel(pub u32);
 
@@ -181,39 +181,39 @@ fn spawn_menu(
                     warn!("{} has no message {id}", text::MAIN_MENU);
                     continue;
                 };
+                // The row only spaces the entries out. The button is the text itself, so hover and
+                // clicks only register over the words, not across the whole panel width.
                 column
-                    .spawn((
-                        action,
-                        Button,
-                        ActivateOnPress,
-                        Hovered::default(),
-                        Node {
-                            height: Val::Px(ROW_HEIGHT),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                    ))
-                    .with_child((MenuLabel(id), Text::new(label), fonts.serif(FONT_SIZE), TextColor(TEXT_COLOR)));
+                    .spawn(Node {
+                        height: Val::Px(ROW_HEIGHT),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        let mut text = row.spawn((
+                            MenuLabel(id),
+                            action,
+                            Button,
+                            ActivateOnPress,
+                            Hovered::default(),
+                            TextColor(TEXT_COLOR),
+                        ));
+                        fonts.insert_text(&mut text, label, UiFont::Large);
+                    });
             }
         });
     commands.remove_resource::<PendingMenu>();
 }
 
-/// Brightens a button's text while hovered and plays the hover sound when the pointer enters.
+/// Brightens a menu entry while hovered and plays the hover sound when the pointer enters.
 fn highlight_hovered(
     mut commands: Commands,
-    buttons: Query<(&Hovered, &Children), (Changed<Hovered>, With<MenuAction>)>,
-    mut colors: Query<&mut TextColor>,
+    mut buttons: Query<(&Hovered, &mut TextColor), (Changed<Hovered>, With<MenuAction>)>,
     sounds: Option<Res<MenuSounds>>,
 ) {
-    for (hovered, children) in &buttons {
-        let color = if hovered.get() { HOVER_COLOR } else { TEXT_COLOR };
-        for child in children {
-            if let Ok(mut text_color) = colors.get_mut(*child) {
-                text_color.0 = color;
-            }
-        }
+    for (hovered, mut text_color) in &mut buttons {
+        text_color.0 = if hovered.get() { HOVER_COLOR } else { TEXT_COLOR };
         if hovered.get()
             && let Some(sounds) = &sounds
         {

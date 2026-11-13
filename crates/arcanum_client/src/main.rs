@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use arcanum_client::main_menu::menu_ready;
 use arcanum_client::{
-    ArcanumAssetsPlugin, DisplayPlugin, FontsPlugin, GameSettings, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
+    ArcanumAssetsPlugin, BitmapTextPlugin, DisplayPlugin, FontsPlugin, GameSettings, MainMenuPlugin, MenuAudioPlugin, ResourcePack,
     ScreensPlugin, VfsAssetPlugin,
 };
 use bevy::prelude::*;
@@ -35,7 +35,7 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins((ArcanumAssetsPlugin, DisplayPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
+        .add_plugins((ArcanumAssetsPlugin, BitmapTextPlugin, DisplayPlugin, FontsPlugin, MenuAudioPlugin, MainMenuPlugin, ScreensPlugin));
 
     if let Ok(path) = std::env::var(SCREENSHOT_VAR) {
         app.insert_resource(ScreenshotPath(path))

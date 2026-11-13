@@ -1,4 +1,6 @@
 pub mod art;
+pub mod cp1252;
+pub mod font;
 pub mod mes;
 
 #[cfg(any(test, feature = "test-util"))]

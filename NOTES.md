@@ -1,7 +1,7 @@
 # Project notes (handoff)
 
 Working notes for whoever picks this up next, human or agent. Read this first, then `README.md`.
-Last updated: 2026-11-13 (interactive menu).
+Last updated: 2026-11-13 (bitmap fonts).
 
 ## What this is
 
@@ -27,9 +27,9 @@ returns), Exit Game quits, MultiPlayer logs "not implemented".
 | Bevy integration | Done. VFS is Bevy's default asset source; `.art` → `Image`, `.mes` → `MesAsset`. |
 | Main menu | Interactive: buttons, hover, click, `AppState` transitions, placeholder screens. |
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50%) and hover/click sounds. |
-| Fonts | Optional TTF from the override folder, else Bevy's built-in font. Bitmap `.art` fonts not decoded. |
+| Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 107 tests, 83 need no game data (synthetic archives/art, headless Bevy). |
+| Tests | 128 tests, 102 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -53,8 +53,10 @@ crates/arcanum_vfs/              game data access, no Bevy dependency
   src/test_util.rs               DatBuilder: writes synthetic .dat files (feature "test-util")
 crates/arcanum_formats/          file format decoders, no Bevy dependency
   src/mes.rs                     MesFile: {id}{text} message files
+  src/cp1252.rs                  Windows-1252 decode/encode (shared by .mes and fonts)
+  src/font.rs                    BitmapFont: glyph lookup, measure, render to a coverage mask
   src/art.rs                     ArtFile: sprites (format notes at top of file)
-  src/test_util.rs               ArtBuilder, TestFrame, rle_encode (feature "test-util")
+  src/test_util.rs               ArtBuilder, TestFrame, rle_encode, font_art (feature "test-util")
   tests/real_files.rs            parses every .mes/.art in the real archives (skips without data)
 crates/arcanum_client/           the Bevy game
   src/main.rs                    app setup; DEBUG_ARCANUM_SCREENSHOT handling
@@ -67,8 +69,9 @@ crates/arcanum_client/           the Bevy game
                                  hover highlight, Activate observer, menu_ready
   src/screens.rs                 ScreensPlugin: placeholder screens, Esc back to the menu
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
-  src/fonts.rs                   FontsPlugin: ArcanumFonts (optional override TTF)
-  tests/headless.rs              33 Bevy tests, no window/GPU/game data
+  src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
+  src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
+  tests/headless.rs              40 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 ```
@@ -115,9 +118,20 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   `schemelist.mes` define music schemes. "M.Main Menu" (#2600) = `music\Arcanum.mp3 /loop /vol:50`.
   Menu text sounds are ids 3026/3027 (`MorphText_HOVER.wav`/`MorphText_CLICK.wav`). WAVs are
   16-bit PCM; music is MP3 (the `bevy` dependency enables the `mp3` and `wav` features).
-- **Fonts**: no TTFs in the game. Bitmap fonts are `.art` files in `art/interface/*Font.art`
-  (Arial, Casablanca, Bookman, ...) and `art/morph15font.art` in `tig.dat`; the menu uses
-  "morph text", so `morph15font` is the likely menu font.
+- **Fonts**: no TTFs in the game. 34 bitmap fonts: `art/interface/*Font.art` plus
+  `art/morph15font.art` in `tig.dat`. Each is static `.art` with 225 frames: frame 0 = text
+  cursor, frame n = Windows-1252 byte n+31 (frame 1 = space, last = 0xFF). All glyphs share the
+  line height; pixel palette indices are a grey ramp = anti-aliasing coverage (alpha mask).
+  Glyph width = advance (no kerning; e.g. `R` includes its tail). Fonts are listed in
+  `art/interface/interface.mes` (Morph30Font = id 327, next to MainMenuBack = 329).
+  The font data has no shading or outline. The original menus draw it in red with a dark
+  drop shadow (from screenshots of the original Single Player menu: solid strokes about
+  `rgb(96,28,20)`, hovered about `rgb(184,48,33)`). `BitmapText` adds a black shadow one font
+  pixel down/right at 80% opacity. The original also looks slightly embossed (lighter stroke
+  centres); that effect is not reproduced and its source in the engine is unknown.
+  **Assumption**: the main menu uses `Morph30Font`. The menu code (`FUN_00546340`) draws with font
+  handles at `0x64c210`/`0x64c218`/`0x64c0cc`/`0x64c228`, chosen by flags; where those are created
+  was not traced.
 - Not yet investigated: the engine's 5-rotation mirrored-sprite optimisation, art id → file name
   mapping (`interface.mes`, `item_inven.mes` etc. look like the indexes), fonts
   (`art/morph15font.art` and similar), sound formats, `.dlg`, `scr/` scripts, maps (`terrain/`,
@@ -152,20 +166,21 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 - Sprites use linear filtering, so scaled 800x600 art looks soft. Consider nearest or a scaler.
 - Windows narrower than 4:3 crop the menu art (they are rejected by resolution validation anyway).
 - Label positions in `main_menu.rs` are hand-tuned constants for the original art.
-- Labels use Bevy's built-in font unless an override TTF is supplied; Arcanum's bitmap fonts
-  are not decoded yet.
+- `BitmapText` is one line only: no wrapping, no alignment options, no `\n`. Characters
+  outside Windows-1252 render as `?`.
+- Bitmap text is upscaled with linear filtering (×1.8 at 1080p), so it is slightly soft.
 - Hover and click are tested headlessly by inserting `Hovered` and triggering `Activate`. The
-  real pointer path (picking updating `Hovered`) has not been checked by an automated test.
+  real pointer path is only checked manually: a screenshot run with the mouse over the window
+  showed the entry under the pointer highlighted.
 - No keyboard navigation of the menu, and no hotkeys from `MainMenu.mes`.
 - `GameSettings` is not persisted (by design for now; env vars only).
 - Steam install folder is not auto-detected; players must set `ARCANUM_DIR`.
 
 ## Suggested next steps
 
-1. Bitmap fonts: decode the font `.art` files (start with `art/morph15font.art`) and render
-   menu text with them.
-2. Single Player menu: the original's second level (`MainMenu.mes` 50 New Game, 51 Load Game, ...)
+1. Single Player menu: the original's second level (`MainMenu.mes` 50 New Game, 51 Load Game, ...)
    in place of the placeholder screen, then menu keyboard hotkeys.
+2. Multi-line `BitmapText` (wrapping, alignment) for longer UI text such as credits.
 3. Art id → path mapping via the `.mes` index files, so assets can be loaded by game id.
 4. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
 5. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the

@@ -2,6 +2,7 @@
 
 pub mod art_loader;
 pub mod audio;
+pub mod bitmap_text;
 pub mod fonts;
 pub mod main_menu;
 pub mod mes_loader;
@@ -14,6 +15,7 @@ use bevy::prelude::*;
 
 pub use art_loader::ArtAssetLoader;
 pub use audio::MenuAudioPlugin;
+pub use bitmap_text::BitmapTextPlugin;
 pub use fonts::FontsPlugin;
 pub use main_menu::{AppState, MainMenuPlugin};
 pub use screens::ScreensPlugin;

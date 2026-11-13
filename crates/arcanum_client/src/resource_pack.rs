@@ -78,10 +78,14 @@ pub mod paths {
         pub const INDEX: &str = "art/scenery/scenery.mes";
     }
 
-    /// Fonts supplied in the override folder. The game itself ships only bitmap `.art` fonts
-    /// (e.g. `art/morph15font.art`), so these are optional and not part of `ALL_FILES`.
+    /// Fonts. The game's own are bitmap `.art` fonts; [`SERIF`](fonts::SERIF) is an optional
+    /// TrueType override that is not part of the game data (so not in `ALL_FILES`).
     pub mod fonts {
-        /// TrueType font for menu text. Falls back to Bevy's built-in font when absent.
+        /// Menu entries and titles.
+        pub const LARGE: &str = "art/interface/Morph30Font.ART";
+        /// Hints and small print.
+        pub const SMALL: &str = "art/interface/morph15font.art";
+        /// TrueType override for UI text. Takes priority over the bitmap fonts when present.
         pub const SERIF: &str = "fonts/arcanum_serif.ttf";
     }
 
@@ -118,6 +122,8 @@ pub mod paths {
         sound::MAIN_MENU_MUSIC,
         sound::MENU_HOVER,
         sound::MENU_CLICK,
+        fonts::LARGE,
+        fonts::SMALL,
     ];
 
     /// Every directory path above, for checks.

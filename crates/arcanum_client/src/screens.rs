@@ -3,8 +3,8 @@
 
 use bevy::prelude::*;
 
-use crate::fonts::ArcanumFonts;
-use crate::main_menu::{AppState, FONT_SIZE, HOVER_COLOR, MenuText, TEXT_COLOR, panel_node};
+use crate::fonts::{ArcanumFonts, UiFont};
+use crate::main_menu::{AppState, HOVER_COLOR, MenuText, TEXT_COLOR, panel_node};
 use crate::mes_loader::MesAsset;
 
 /// Marks the root of a placeholder screen.
@@ -47,10 +47,12 @@ fn spawn_placeholder(
     let fonts = fonts.map(|f| f.clone()).unwrap_or_default();
 
     commands
-        .spawn((PlaceholderScreen(state), DespawnOnExit(state), Node { align_items: AlignItems::Center, row_gap: Val::Px(FONT_SIZE), ..panel_node() }))
+        .spawn((PlaceholderScreen(state), DespawnOnExit(state), Node { align_items: AlignItems::Center, row_gap: Val::Px(UiFont::Large.ttf_size()), ..panel_node() }))
         .with_children(|panel| {
-            panel.spawn((Text::new(title), fonts.serif(FONT_SIZE * 1.2), TextColor(HOVER_COLOR)));
-            panel.spawn((Text::new(RETURN_HINT), fonts.serif(FONT_SIZE * 0.6), TextColor(TEXT_COLOR)));
+            let mut heading = panel.spawn(TextColor(HOVER_COLOR));
+            fonts.insert_text(&mut heading, &title, UiFont::Large);
+            let mut hint = panel.spawn(TextColor(TEXT_COLOR));
+            fonts.insert_text(&mut hint, RETURN_HINT, UiFont::Small);
         });
 }
 
