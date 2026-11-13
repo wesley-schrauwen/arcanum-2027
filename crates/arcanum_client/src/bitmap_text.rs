@@ -12,6 +12,7 @@
 //! If the font fails to load, the entity falls back to ordinary [`Text`] with Bevy's built-in
 //! font so the words still appear.
 
+pub use arcanum_formats::font::Align;
 use arcanum_formats::font::{BitmapFont, FontError, RenderedText};
 use bevy::asset::{AssetLoader, LoadContext, LoadState, RenderAssetUsages, io::Reader};
 use bevy::prelude::*;
@@ -65,7 +66,10 @@ impl AssetLoader for BitmapFontLoader {
     }
 }
 
-/// One line of text in a bitmap font. Tint it with [`TextColor`].
+/// Text in a bitmap font. Tint it with [`TextColor`].
+///
+/// Newlines (real or the game's escaped `\n`) start new lines and leading tabs indent; with
+/// `max_width` the text also wraps between words to fit that width.
 #[derive(Component, Debug, Clone)]
 #[require(Node)]
 pub struct BitmapText {
@@ -75,6 +79,28 @@ pub struct BitmapText {
     pub scale: f32,
     /// Draw a drop shadow one font pixel down and right.
     pub shadow: bool,
+    /// Wrap to this width, in logical pixels. `None`: lines are as long as their text.
+    pub max_width: Option<f32>,
+    pub align: Align,
+}
+
+impl BitmapText {
+    /// One block of text in `font`, unwrapped, left-aligned, with a shadow.
+    pub fn new(text: impl Into<String>, font: Handle<BitmapFontAsset>, scale: f32) -> Self {
+        Self { text: text.into(), font, scale, shadow: true, max_width: None, align: Align::Left }
+    }
+
+    /// Wraps to `width` logical pixels.
+    pub fn wrapped(mut self, width: f32, align: Align) -> Self {
+        self.max_width = Some(width);
+        self.align = align;
+        self
+    }
+
+    /// The wrap width in font pixels.
+    fn wrap_in_font_pixels(&self) -> Option<u32> {
+        self.max_width.map(|w| (w / self.scale).floor().max(1.0) as u32)
+    }
 }
 
 /// Opacity of the drop shadow where the text is fully opaque.
@@ -137,7 +163,8 @@ fn render_bitmap_text(
             commands.entity(entity).remove::<BitmapTextRendered>();
             continue;
         };
-        let rendered = font.0.render(&text.text);
+        let wrap = text.wrap_in_font_pixels();
+        let rendered = font.0.render_block(&text.text, wrap, text.align);
         let mut entity_commands = commands.entity(entity);
         if rendered.width == 0 {
             node.width = Val::Px(0.0);

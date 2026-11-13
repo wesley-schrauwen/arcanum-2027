@@ -38,7 +38,7 @@ Options opens the original options screen (see below).
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50% × Music setting) and hover/click sounds (× Effects). Options arrows use `Button_Medium.wav` on press and `Button_Medium_Release.wav` on release, no hover sound, as in the original (confirmed in Arcanum.exe at 0x57fe60: art 667/668 with sound ids 3000/3001); text buttons keep `MorphText_CLICK.wav`. Voice volume applies to anything spawned with `play_voice`/`VoiceLine` (no voice plays yet). All live. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 193 tests, 167 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 200 tests, 174 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -88,7 +88,7 @@ crates/arcanum_client/           the Bevy game
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              78 Bevy tests, no window/GPU/game data
+  tests/headless.rs              79 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
@@ -202,8 +202,9 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 ## New Game picker: research and plan (in progress)
 
 Owner's decision: build it properly (option a), in three steps, each its own PR:
-1. **Multi-line `BitmapText`**: wrapping to a width, `\n` and real line breaks, `\t` indents
-   (the story texts use both), in the original fonts.
+1. **Multi-line `BitmapText`**: done (wrapping, real/escaped `\n`, `\t` indents, left/centre).
+   Checked in a real-game screenshot with Lugard Bloodstone's story in the description panel;
+   the full story is taller than the panel, so step 3 needs clipping or scrolling there.
 2. **Object file reader** (`arcanum_formats`): Arcanum's binary object format (`.mpc` pre-made
    characters; the same format is used by save games and map objects). Needs the field order,
    worked out from Arcanum.exe. Minimum for the picker: name, race, gender, background, portrait.
@@ -242,8 +243,10 @@ What is known so far:
 - Sprites use linear filtering, so scaled 800x600 art looks soft. Consider nearest or a scaler.
 - Windows narrower than 4:3 crop the menu art (they are rejected by resolution validation anyway).
 - Label positions in `main_menu.rs` are hand-tuned constants for the original art.
-- `BitmapText` is one line only: no wrapping, no alignment options, no `\n`. Characters
-  outside Windows-1252 render as `?`.
+- `BitmapText` wraps (`max_width`), breaks at real or escaped `\n`, indents leading tabs (4
+  spaces per stop) and aligns left or centre (`BitmapFont::layout`/`render_block`,
+  `ArcanumFonts::insert_paragraph`). No vertical clipping or scrolling yet: a long story overflows
+  the New Game description panel. Characters outside Windows-1252 render as `?`.
 - Bitmap text is upscaled with linear filtering (×1.8 at 1080p), so it is slightly soft.
 - Options sliders only step with the arrows (no click or drag on the tube). The bottom help box
   and the round lens (`OptionsPCLens.art`) on the options art are unused.

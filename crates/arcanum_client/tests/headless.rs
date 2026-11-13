@@ -1839,3 +1839,32 @@ fn brightness_follows_the_setting_on_the_camera() {
     assert_eq!(exponent(&mut app), brightness_exponent(0.9));
     assert!(exponent(&mut app) < 1.0, "above the middle lightens");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Multi-line bitmap text
+
+#[test]
+fn wrapped_bitmap_text_grows_to_several_lines() {
+    use arcanum_client::bitmap_text::Align;
+    let mut app = ready_menu(&fixture_with_fonts());
+    let font = app.world().resource::<ArcanumFonts>().small.clone().unwrap();
+    let story = "\tA long story that goes on for a good while.\nSecond paragraph here.";
+    let one_line = app.world_mut().spawn(BitmapText::new("single line", font.clone(), 1.0)).id();
+    let block = app.world_mut().spawn(BitmapText::new(story, font.clone(), 1.0).wrapped(40.0, Align::Left)).id();
+    let escaped = app.world_mut().spawn(BitmapText::new("one\\ntwo", font, 1.0)).id();
+    run_until_text_rendered(&mut app);
+    let height = |app: &App, e: Entity| match app.world().get::<Node>(e).unwrap().height {
+        Val::Px(h) => h,
+        other => panic!("{other:?}"),
+    };
+    let width = |app: &App, e: Entity| match app.world().get::<Node>(e).unwrap().width {
+        Val::Px(w) => w,
+        other => panic!("{other:?}"),
+    };
+    // Heights are lines * line height, plus one pixel of shadow.
+    assert_eq!(height(&app, one_line), (SMALL_LINE + 1) as f32);
+    assert_eq!(height(&app, escaped), (2 * SMALL_LINE + 1) as f32, "escaped \\n breaks the line");
+    let lines = (height(&app, block) - 1.0) / SMALL_LINE as f32;
+    assert!(lines >= 4.0, "wrapped into {lines} lines");
+    assert_eq!(width(&app, block), 41.0, "as wide as the wrap width (plus the shadow)");
+}
