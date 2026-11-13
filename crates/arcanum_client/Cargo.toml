@@ -9,6 +9,9 @@ license = "MIT"
 bevy = { version = "0.20", features = ["mp3", "wav"] }
 arcanum_vfs = { path = "../arcanum_vfs" }
 arcanum_formats = { path = "../arcanum_formats" }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"
+dirs = "7.0.0"
 [dev-dependencies]
 arcanum_vfs = { path = "../arcanum_vfs", features = ["test-util"] }
 arcanum_formats = { path = "../arcanum_formats", features = ["test-util"] }

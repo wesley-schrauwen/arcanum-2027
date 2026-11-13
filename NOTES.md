@@ -27,11 +27,11 @@ options screen (see below).
 | `.art` sprites | Frame decode done (raw + RLE, palettes, 8 rotations). No animation playback. |
 | Bevy integration | Done. VFS is Bevy's default asset source; `.art` → `Image`, `.mes` → `MesAsset`. |
 | Main menu | Interactive: buttons, hover, click, `AppState` transitions, placeholder screens. |
-| Options screen | Original art and text; Game/Video/Sound tabs, arrows on every setting, commit on change. Resolution: arrows pick, Update applies, then a 15 s confirm/auto-revert. Settings are "dumb plugs": stored, not applied (except resolution/fullscreen), not saved. |
-| Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50%) and hover/click sounds. |
+| Options screen | Original art and text; Game/Video/Sound tabs, arrows on every setting, commit on change. Resolution: arrows pick, Done applies, then "Confirm Resolution" with a 15 s auto-revert. Saved to `config.toml` on leaving the screen. Resolution, fullscreen and the three volumes take effect; the rest are stored only. |
+| Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50% × Music setting) and hover/click sounds (× Effects). Voice volume applies to anything spawned with `play_voice`/`VoiceLine` (no voice plays yet). All live. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 153 tests, 127 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 172 tests, 146 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -66,7 +66,8 @@ crates/arcanum_client/           the Bevy game
   src/vfs_asset.rs               VfsAssetReader / VfsAssetPlugin: VFS as Bevy's asset source
   src/art_loader.rs              ArtAssetLoader: .art → Image (frame 0); ArtFramesLoader: all frames
   src/mes_loader.rs              MesAsset / MesAssetLoader
-  src/settings.rs                DisplayResolution, GameSettings, DisplayPlugin, UiScale
+  src/settings.rs                DisplayResolution, GameSettings (serde, sanitize), EnvOverrides, DisplayPlugin, UiScale
+  src/config.rs                  config.toml: path, lenient load, atomic save on leaving Options
   src/main_menu.rs               AppState, MenuAction, MainMenuPlugin: camera, background, buttons,
                                  hover highlight, Activate observer, menu_ready
   src/options.rs                 OptionsPlugin: Options screen, OptionId/OptionsTab model, resolution confirm
@@ -75,7 +76,7 @@ crates/arcanum_client/           the Bevy game
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              58 Bevy tests, no window/GPU/game data
+  tests/headless.rs              63 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
@@ -93,8 +94,9 @@ cargo test --workspace                              # real-data tests skip witho
 | `ARCANUM_DIR` | Game folder with `arcanum1.dat` etc. Default `assets/Arcanum`. Tests honour it too. |
 | `ARCANUM_OVERRIDE` | Loose-file folder that shadows everything else. |
 | `ARCANUM_MODULE` | Module to mount from `modules/`. Default `Arcanum`. |
-| `ARCANUM_RES` | `WxH`, e.g. `3440x1440`. Invalid values fall back to 1920x1080. |
-| `ARCANUM_FULLSCREEN` | `1`/`true` for borderless fullscreen. |
+| `ARCANUM_RES` | `WxH`, e.g. `3440x1440`. Overrides the saved resolution for this run only (not written back). Invalid values are ignored. |
+| `ARCANUM_FULLSCREEN` | `1`/`true` for borderless fullscreen. Overrides the saved value for this run only. |
+| `ARCANUM_CONFIG` | Path of the settings file to use instead of `<user config dir>/open-arcanum/config.toml` (macOS: `~/Library/Application Support/open-arcanum/`). |
 | `DEBUG_ARCANUM_SCREENSHOT` | Path; saves the window once the menu (or Options) is ready, then exits. Used to verify rendering. |
 | `DEBUG_ARCANUM_SCREEN` | `options` opens straight onto the Options screen (for screenshots). |
 
@@ -161,7 +163,9 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   no Cancel. Resolution is the exception: its arrows only pick a pending value; Done (or Esc)
   applies it and asks "Confirm Resolution" before returning to the menu. Keep keeps it; Revert, Esc
   or 15 s without an answer restores the previous one; either way the menu follows. The rest
-  of the screen is locked while the question is up. Settings are dumb plugs for now;
+  of the screen is locked while the question is up. Settings are saved to `config.toml` when
+  the player leaves Options (so only a confirmed or reverted resolution is ever saved); boot order
+  is defaults → file → env vars. The three volumes are live; other settings are stored only for now;
   English only (a future text manager may hot-swap strings). Tabs: Game = Auto Attack, Combat
   Taunts; Video = Brightness, Text Duration, Floats, Float Speed, Fullscreen, Resolution; Sound = Effects, Voice, Music.
 - UI and camera are authored against a **1080-unit-tall baseline**. The camera is
@@ -198,13 +202,14 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   real pointer path is only checked manually: a screenshot run with the mouse over the window
   showed the entry under the pointer highlighted.
 - No keyboard navigation of the menu, and no hotkeys from `MainMenu.mes`.
-- `GameSettings` is not persisted (by design for now; env vars only).
+- Config loading is lenient: a bad or unknown key is skipped with a warning (logged at startup),
+  out-of-range sliders are clamped; the file is rewritten on leaving Options.
 - Steam install folder is not auto-detected; players must set `ARCANUM_DIR`.
 
 ## Suggested next steps
 
-1. Make settings take effect: music/effects volume on the audio, brightness on the camera.
-   Then persist `GameSettings` (owner deferred this).
+1. Make the remaining settings take effect: brightness on the camera; the gameplay settings once
+   their systems exist. Dialogue must play voice through `audio::play_voice`.
 2. Single Player menu: the original's second level (`MainMenu.mes` 50 New Game, 51 Load Game, ...)
    in place of the placeholder screen, then menu keyboard hotkeys.
 3. Multi-line `BitmapText` (wrapping, alignment) for longer UI text such as credits.
