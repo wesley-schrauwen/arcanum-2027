@@ -78,7 +78,7 @@ crates/arcanum_client/           the Bevy game
   tests/headless.rs              58 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
-plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management)
+plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
 ```
 
 ## Running

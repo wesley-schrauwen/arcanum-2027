@@ -8,11 +8,16 @@ assigns.
 ## Turn cycle
 
 At the start of every turn cycle, the player chooses the **party stance** (`Offensive`,
-`Defensive` or `Neutral`). It applies to the whole party for that cycle, and the companions'
-turns are then planned with it.
+`Defensive` or `Neutral`). Stance is party-wide only: companions have no stance of their own.
+It applies to the whole party for that cycle. In multiplayer, the party leader chooses it (see
+[Multiplayer](multiplayer.md)).
 
-Open question: does the party stance override each companion's own `CombatStance`, or act as a
-default that individual directives can change?
+The stance does more than shift the AI's scoring weights. It grants the whole party a **small
+buff for that turn**, matched to the stance. The buff rewards players who play in line with the
+stance they chose.
+
+The companion AI bases its decisions on the stance too. It plans its turns to make use of the
+active buff, the same way a player would. Buff effects and sizes are still to be designed.
 
 ## 1. Core data structures
 
@@ -29,8 +34,10 @@ the start of every planning phase.
   | `Kill` | 3.0 |
 
 - **`CombatRole`**: `Tank`, `Healer`, `Dps`.
-- **`CombatStance`**: `Offensive`, `Defensive`, `Neutral`.
 - **`CombatStyle`**: `Kite`, `Engage`, `Hold`.
+
+The party-wide **`PartyStance`** (`Offensive`, `Defensive`, `Neutral`) is a single resource set
+each turn cycle, not a per-companion directive.
 
 ## 2. How the utility scorer evaluates a turn
 
@@ -49,7 +56,7 @@ penalties, unless the enemy is unreachable.
 
 ### Resource and stance thresholds
 
-Stance multiplies risk and resource spending:
+The party stance multiplies risk and resource spending for every companion:
 
 - **`Offensive`** boosts the weights of damage actions. It also lowers the minimum Fatigue or
   Mana the companion keeps in reserve; for example, it will spend down to 10% Fatigue.
