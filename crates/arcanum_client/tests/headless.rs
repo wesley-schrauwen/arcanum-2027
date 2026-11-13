@@ -59,7 +59,7 @@ use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
 // ---------------------------------------------------------------------------------------------
 // Fixtures
 
-const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n{34}{Onward}{50}{Begin}{51}{Resume}{52}{Latest}{53}{Movie}{54}{Back}\r\n{4000}{Gameplay}{4001}{Picture}{4002}{Audio}{4003}{Finished}\r\n";
+const MENU_MES: &[u8] = b"// test menu\r\n{10}{Play}\r\n{11}{Online}\r\n{12}{Settings}\r\n{13}{Thanks}\r\n{14}{Quit}\r\n{34}{Onward}{50}{Begin}{51}{Resume}{52}{Latest}{53}{Movie}{54}{Back}{420}{Premade}{421}{Custom}{422}{Return}\r\n{4000}{Gameplay}{4001}{Picture}{4002}{Audio}{4003}{Finished}\r\n";
 
 /// An 8x6 static sprite whose pixel at index `i` uses palette index `i % 256`.
 fn menu_art_indices() -> Vec<u8> {
@@ -757,8 +757,7 @@ fn cancel_and_escape_return_to_the_main_menu() {
 
 #[test]
 fn new_game_goes_through_the_loading_screen_into_the_world() {
-    let mut app = open_single_player(&Fixture::new());
-    activate(&mut app, MenuAction::NewGame);
+    let mut app = open_new_game_picker(&Fixture::new());
     assert_eq!(state(&app), AppState::NewGame);
     press_new_game(&mut app, NewGameAction::Next);
     assert_eq!(state(&app), AppState::Loading);
@@ -1785,12 +1784,10 @@ fn press_new_game(app: &mut App, action: NewGameAction) {
 
 #[test]
 fn new_game_shows_its_screen_and_goes_back() {
-    let mut app = open_single_player(&Fixture::new());
-    activate(&mut app, MenuAction::NewGame);
-    app.update();
+    let mut app = open_new_game_picker(&Fixture::new());
     let world = app.world_mut();
     assert_eq!(world.query::<&NewGameScreen>().iter(world).count(), 1);
-    assert_eq!(world.query::<&NewGameAction>().iter(world).count(), 2, "Back and Next");
+    assert_eq!(world.query::<&NewGameAction>().iter(world).count(), 4, "Back, Next and the two character arrows");
     // The shared frame's hover help works here too.
     let next = {
         let world = app.world_mut();
@@ -1805,14 +1802,14 @@ fn new_game_shows_its_screen_and_goes_back() {
     assert_eq!(texts_in(&mut app, help), ["Next Screen"]);
 
     press_new_game(&mut app, NewGameAction::Back);
-    assert_eq!(state(&app), AppState::SinglePlayer);
+    assert_eq!(state(&app), AppState::NewGameChoice);
     let world = app.world_mut();
     assert_eq!(world.query::<&NewGameScreen>().iter(world).count(), 0);
 
-    activate(&mut app, MenuAction::NewGame);
+    activate(&mut app, MenuAction::PickCharacter);
     app.update();
     press_escape(&mut app);
-    assert_eq!(state(&app), AppState::SinglePlayer, "Escape goes back too");
+    assert_eq!(state(&app), AppState::NewGameChoice, "Escape goes back too");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1867,4 +1864,115 @@ fn wrapped_bitmap_text_grows_to_several_lines() {
     let lines = (height(&app, block) - 1.0) / SMALL_LINE as f32;
     assert!(lines >= 4.0, "wrapped into {lines} lines");
     assert_eq!(width(&app, block), 41.0, "as wide as the wrap width (plus the shadow)");
+}
+
+// ---------------------------------------------------------------------------------------------
+// New Game choice (pre-made or custom)
+
+fn open_new_game_picker(fx: &Fixture) -> App {
+    let mut app = open_single_player(fx);
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    activate(&mut app, MenuAction::PickCharacter);
+    app.update();
+    app
+}
+
+#[test]
+fn new_game_first_asks_pre_made_or_custom() {
+    let mut app = open_single_player(&Fixture::new());
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    assert_eq!(state(&app), AppState::NewGameChoice);
+    assert_eq!(
+        label_order(&mut app),
+        [(420, "Premade"), (421, "Custom"), (422, "Return")].map(|(id, t)| (id, t.to_string()))
+    );
+    // Character creation does not exist yet: dimmed and inert.
+    let custom = button_for(&mut app, MenuAction::CreateCharacter);
+    assert!(app.world().get::<Button>(custom).is_none());
+    assert_eq!(label_color(&mut app, custom), DISABLED_COLOR);
+
+    activate(&mut app, MenuAction::BackToSinglePlayer);
+    app.update();
+    assert_eq!(state(&app), AppState::SinglePlayer);
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    press_escape(&mut app);
+    assert_eq!(state(&app), AppState::SinglePlayer, "Escape goes back one level");
+
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    activate(&mut app, MenuAction::PickCharacter);
+    app.update();
+    assert_eq!(state(&app), AppState::NewGame);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pre-made character picker
+
+fn sample_premades() -> arcanum_client::premade::PremadeCharacters {
+    use arcanum_client::premade::Premade;
+    let p = |prototype, name: &str, race: &str, gender: &str| Premade {
+        prototype,
+        name: name.into(),
+        race: race.into(),
+        gender: gender.into(),
+        age: 20,
+        level: 1,
+        background: 46,
+        story: format!("{name}\r\n\r\n\tA story about {name}."),
+        portrait: None,
+    };
+    arcanum_client::premade::PremadeCharacters(vec![
+        p(16087, "Merwin", "Halfling", "Male"),
+        p(16094, "Lugard", "Dwarf", "Male"),
+        p(16095, "Victoria", "Human", "Female"),
+    ])
+}
+
+fn picker_text(app: &mut App, which: arcanum_client::new_game::PickerText) -> String {
+    let world = app.world_mut();
+    let e = world.query::<(Entity, &arcanum_client::new_game::PickerText)>().iter(world).find(|(_, t)| **t == which).unwrap().0;
+    texts_in(app, e).remove(0)
+}
+
+#[test]
+fn the_picker_cycles_through_the_characters_and_shows_them() {
+    use arcanum_client::new_game::{ChosenCharacter, PickerIndex, PickerText};
+    let mut app = ready_menu(&Fixture::new());
+    app.insert_resource(sample_premades());
+    activate(&mut app, MenuAction::SinglePlayer);
+    app.update();
+    activate(&mut app, MenuAction::NewGame);
+    app.update();
+    activate(&mut app, MenuAction::PickCharacter);
+    app.update();
+    app.update();
+    assert_eq!(app.world().resource::<PickerIndex>().0, 0);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Merwin");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(0)), "Male");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(1)), "Halfling");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(2)), "Merwin", "the background's title line");
+    assert_eq!(picker_text(&mut app, PickerText::StatsHeading), "Initial Stats");
+    // The body is the story without its heading line (the fallback font turns the tab into spaces).
+    assert_eq!(picker_text(&mut app, PickerText::StoryBody).trim(), "A story about Merwin.");
+
+    press_new_game(&mut app, NewGameAction::Following);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Lugard");
+    press_new_game(&mut app, NewGameAction::Previous);
+    press_new_game(&mut app, NewGameAction::Previous);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Victoria", "wraps backwards");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(0)), "Female");
+    assert_eq!(picker_text(&mut app, PickerText::Bar(1)), "Human");
+    press_new_game(&mut app, NewGameAction::Following);
+    assert_eq!(picker_text(&mut app, PickerText::Name), "Merwin", "and forwards");
+    // Only one character's content at a time.
+    let world = app.world_mut();
+    assert_eq!(world.query::<&arcanum_client::new_game::PickerContent>().iter(world).count(), 1);
+
+    press_new_game(&mut app, NewGameAction::Following);
+    press_new_game(&mut app, NewGameAction::Next);
+    assert_eq!(app.world().resource::<ChosenCharacter>().0, 16094);
+    assert_eq!(state(&app), AppState::Loading);
 }

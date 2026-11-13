@@ -112,3 +112,22 @@ fn every_resource_pack_path_exists_in_the_game_data() {
         assert!(!vfs.list_dir(dir).unwrap().is_empty(), "empty directory {dir}");
     }
 }
+
+#[test]
+fn pre_made_characters_load_with_their_story_and_portrait() {
+    let Some(vfs) = game_vfs(&pack()) else { return };
+    let premades = arcanum_client::premade::load(&vfs).unwrap();
+    assert_eq!(premades.len(), 12);
+    let lugard = premades.iter().find(|p| p.name == "Lugard Bloodstone").unwrap();
+    assert_eq!((lugard.race.as_str(), lugard.gender.as_str()), ("Dwarf", "Male"));
+    assert_eq!(lugard.background, 46);
+    assert_eq!(arcanum_client::premade::split_story(&lugard.story).0, "Lugard Bloodstone");
+    assert!(lugard.story.contains("steam-powered shovel"));
+    assert_eq!(lugard.portrait.as_deref(), Some("portrait/DWM2_b.bmp"));
+    for p in &premades {
+        assert!(!p.name.is_empty() && !p.story.is_empty() && !p.race.is_empty(), "{p:?}");
+        assert!(vfs.exists(p.portrait.as_deref().unwrap()), "{p:?}");
+    }
+    // The prototypes' real names, not the .mpc placeholders.
+    assert!(premades.iter().any(|p| p.name == "Clarisse Vorak"));
+}

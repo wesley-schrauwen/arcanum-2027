@@ -12,6 +12,7 @@ pub mod main_menu;
 pub mod menu_window;
 pub mod mes_loader;
 pub mod new_game;
+pub mod premade;
 pub mod options;
 pub mod resource_pack;
 pub mod screens;

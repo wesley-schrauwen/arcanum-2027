@@ -38,7 +38,7 @@ Options opens the original options screen (see below).
 | Audio | Menu music (`sound/music/Arcanum.mp3`, loop, 50% × Music setting) and hover/click sounds (× Effects). Options arrows use `Button_Medium.wav` on press and `Button_Medium_Release.wav` on release, no hover sound, as in the original (confirmed in Arcanum.exe at 0x57fe60: art 667/668 with sound ids 3000/3001); text buttons keep `MorphText_CLICK.wav`. Voice volume applies to anything spawned with `play_voice`/`VoiceLine` (no voice plays yet). All live. |
 | Fonts | Game bitmap fonts decoded and rendered (`BitmapText`). Menu uses `Morph30Font`/`morph15font`. Override TTF still wins if present; built-in font as last resort. |
 | Resolutions | Done. 720p–8K, 4:3–2.4:1, `UiScale` from a 1080 baseline. |
-| Tests | 200 tests, 174 need no game data (synthetic archives/art/fonts, headless Bevy). |
+| Tests | 211 tests, 182 need no game data (synthetic archives/art/fonts, headless Bevy). |
 | Everything else | Not started: game screens, maps, critters, dialogue, scripts, saves. |
 
 ### Git state
@@ -62,6 +62,7 @@ crates/arcanum_vfs/              game data access, no Bevy dependency
   src/test_util.rs               DatBuilder: writes synthetic .dat files (feature "test-util")
 crates/arcanum_formats/          file format decoders, no Bevy dependency
   src/mes.rs                     MesFile: {id}{text} message files
+  src/object.rs                  Object (prototype/instance), PlayerFile (.mpc); PC field tables
   src/cp1252.rs                  Windows-1252 decode/encode (shared by .mes and fonts)
   src/font.rs                    BitmapFont: glyph lookup, measure, render to a coverage mask
   src/art.rs                     ArtFile: sprites (format notes at top of file)
@@ -82,13 +83,14 @@ crates/arcanum_client/           the Bevy game
   src/screens.rs                 ScreensPlugin: placeholder screens (world, Credits), Esc back to the menu
   src/brightness.rs             BrightnessPlugin: gamma pass after the UI (brightness.wgsl)
   src/menu_window.rs             MenuWindowPlugin: shared 800x600 frame, Back/Next, hover help
-  src/new_game.rs                NewGamePlugin: New Game (character picker) scaffold
+  src/new_game.rs                NewGamePlugin: pre-made character picker
+  src/premade.rs                 pre-made characters from their prototypes (name, race, story, portrait)
   src/load_game.rs               LoadGamePlugin: Load Game screen, SaveGames, LoadGameState
   src/loading.rs                 LoadingPlugin: loading screen, LoadRequest, LoadingProgress
   src/audio.rs                   MenuAudioPlugin: menu music, MenuSounds (hover/click)
   src/fonts.rs                   FontsPlugin: ArcanumFonts, UiFont, insert_text (picks TTF/bitmap/default)
   src/bitmap_text.rs             BitmapTextPlugin: font asset + loader, BitmapText rasterise/tint/fallback
-  tests/headless.rs              79 Bevy tests, no window/GPU/game data
+  tests/headless.rs              81 Bevy tests, no window/GPU/game data
   tests/vfs_assets.rs            real-data tests, incl. "every resource_pack path exists"
 assets/                          symlink to the local game install; gitignored, never commit
 plans/                           design plans for future work (combat_design.md: companion combat AI; companions.md: follower management; multiplayer.md: co-op architecture)
@@ -201,14 +203,33 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 
 ## New Game picker: research and plan (in progress)
 
+New Game first shows a text menu (`AppState::NewGameChoice`, built on the main menu panel):
+Pick Character / New Character / Cancel, `MainMenu.mes` 420-422. Confirmed in Arcanum.exe:
+window table at 0x5c3a40; record 0x5c4bb0 (index 11) has background 329, first id 420, count 3,
+buttons at 0x5c4b20 whose codes are window-table indexes (13 = pre-made picker 0x5c5270, 12 =
+character creation 0x5c4e28 with art 765, -2 = back). Single Player's buttons use codes 11, 7, 9.
+New Character is dimmed until character creation exists.
+
 Owner's decision: build it properly (option a), in three steps, each its own PR:
 1. **Multi-line `BitmapText`**: done (wrapping, real/escaped `\n`, `\t` indents, left/centre).
    Checked in a real-game screenshot with Lugard Bloodstone's story in the description panel;
    the full story is taller than the panel, so step 3 needs clipping or scrolling there.
-2. **Object file reader** (`arcanum_formats`): Arcanum's binary object format (`.mpc` pre-made
-   characters; the same format is used by save games and map objects). Needs the field order,
-   worked out from Arcanum.exe. Minimum for the picker: name, race, gender, background, portrait.
-3. **Fill the picker screen** (`new_game.rs`) and go on to character creation.
+2. **Object file reader**: done for player characters. `arcanum_formats::object`:
+   `Object::parse_prototype` / `parse_instance`, `PlayerFile::parse` (.mpc), field tables generated
+   from the engine names; real-data tests parse all 13 PC prototypes and all 12 `.mpc` to the last
+   byte and check names, backgrounds, story ids, portraits, race and gender. The VFS now mounts
+   `<ARCANUM_DIR>/data` (loose `proto/`, `Players/`) between the module and the base archives.
+   Next object types (NPC, items, ...) need their field blocks and any storage-kind corrections.
+3. **Fill the picker screen**: done except the stats. `premade.rs` loads the 12 pre-mades
+   (prototypes 16087-16098) through the VFS; `new_game.rs` shows, as the original does (draw
+   code 0x5458d0 + 0x5448e0, mode flag 0x64c458 = 0 for the picker): bar 1 the name (field
+   0x10e), bar 2 `MainMenu.mes` 740+gender, bar 3 720+race, bar 4 the background title (first
+   line of `gameback.mes`), "Initial Stats" (739) atop the upper-right panel, and the story body
+   (after the first line) wrapped across the whole large panel 0x5c5070, whole lines only. Bar
+   texts centre when they fit (0x542df0). Arrows `Big_Grn_L/R` cycle with wrap; Next stores
+   `ChosenCharacter` (prototype number). Not yet: the stat values in the upper-right panel (loop
+   at 0x544f2b, untraced), story scrolling, fonts/colours (font slots 0x64c210-0x64c21c,
+   near-white; our text uses the small font and INFO_COLOR). Then character creation.
 
 What is known so far:
 - **Screen**: window table entry at Arcanum.exe `0x5c5270` (background art 766
@@ -273,14 +294,21 @@ What is known so far:
   reference (`u8 present` + 24-byte ObjectID); `pc_player_name` = string (`u8 present` + `u32 len`
   + bytes); everything else i32. With this table **all 12 `.mpc` parse to the exact byte**
   (`python3 tools/object_probe/walk2.py` from the scratch layout; it reads `players/*.mpc`).
-- **Prototypes (`data/proto/*.pro`) still drift:** header = version · prototype ObjectID (none) ·
-  ObjectID (kind 1, proto number) · `u32 type` · 20-byte bitmap at 56 · fields from 76, and they
-  store *every* field (not just bitmap bits). Common block and critter fields through
-  `effect_cause_idx` decode correctly; from `critter_gold` on it is off by about one byte
-  (likely object references or another field type differ in prototypes). Lugard's background
-  46 / story 1046 sit at offsets 890/894, name as a present-flagged string at 915. Open question
-  for the next step: find the prototype field encoding (REA on the proto read code, or more data).
-- Next: finish prototypes, mount `data/` in the VFS (proto + Players), then the Rust reader.
+- **Prototypes (`data/proto/*.pro`): solved; all 13 PC prototypes and all 12 `.mpc` parse to
+  the exact byte** with `tools/object_probe/walk2.py`. Rules: header = `u32 version` (0x77) ·
+  prototype ObjectID (none) · ObjectID (kind 1, proto number) · `u32 type` · 20-byte bitmap at 56
+  (a "fields set in this prototype" mask, bit layout as for instances; NOT a filter: walking only
+  set bits fails) · then **every** field of the type in enum order from offset 76.
+  Corrections to the name-based types: `critter_arrows/bullets/power_cells/fuel` are object
+  references like `critter_gold`. String fields = `u8 present` · `u32 len` · `len` bytes · a NUL
+  not counted in `len` (trailer strings in `.mpc` count their NUL instead).
+- **Pre-made data from the prototypes** (`016086` is the empty "create your own" template):
+  `description` = 16066 + index (the `0x3ec2 + index` the picker code uses); names, backgrounds
+  39-50 with story ids 1039-1050 (`mes/gameback.mes`), portraits 1002-1033, race = stat 27,
+  gender = stat 26. The two `.mpc` placeholder names are Clarisse Vorak (16097) and Ker'ee
+  Melange (16098) in the prototypes.
+- Next: mount `<ARCANUM_DIR>/data` in the VFS (proto, Players), then the Rust reader
+  (`arcanum_formats::object`), then fill the picker.
 
 ## Known issues / backlog (not started)
 

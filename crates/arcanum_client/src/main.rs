@@ -18,7 +18,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 /// Debugging aid: when set to a file path, saves the window there once the menu has loaded,
 /// then exits.
 const SCREENSHOT_VAR: &str = "DEBUG_ARCANUM_SCREENSHOT";
-/// Debugging aid: `options`, `singleplayer`, `newgame`, `loadgame` or `loading` opens that screen instead of
+/// Debugging aid: `options`, `singleplayer`, `newgamechoice`, `newgame`, `loadgame` or `loading` opens that screen instead of
 /// the main menu.
 const SCREEN_VAR: &str = "DEBUG_ARCANUM_SCREEN";
 
@@ -64,10 +64,11 @@ fn main() {
             ScreensPlugin,
         ));
 
-    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options|singleplayer|newgame|loadgame|loading` opens that screen.
+    // Debugging aid: `DEBUG_ARCANUM_SCREEN=options|singleplayer|newgamechoice|newgame|loadgame|loading` opens that screen.
     let start = match std::env::var(SCREEN_VAR).unwrap_or_default().to_ascii_lowercase().as_str() {
         "options" => Some(AppState::Options),
         "singleplayer" => Some(AppState::SinglePlayer),
+        "newgamechoice" => Some(AppState::NewGameChoice),
         "newgame" => Some(AppState::NewGame),
         // With example saves, so the list and info display have something to show.
         "loadgame" => {

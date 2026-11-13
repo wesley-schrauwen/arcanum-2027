@@ -27,7 +27,9 @@ pub enum AppState {
     MainMenu,
     /// The Single Player menu (New Game, Load Game, ...).
     SinglePlayer,
-    /// The New Game screen (see [`crate::new_game`]).
+    /// After New Game: pick a pre-made character or create your own (a text menu).
+    NewGameChoice,
+    /// The pre-made character picker (see [`crate::new_game`]).
     NewGame,
     /// The Load Game screen (see [`crate::load_game`]).
     LoadGame,
@@ -54,12 +56,19 @@ pub enum MenuAction {
     Continue,
     /// Back to the main menu.
     Cancel,
+    // New Game choice
+    /// The pre-made character picker.
+    PickCharacter,
+    /// Character creation (not built yet).
+    CreateCharacter,
+    /// Back to the Single Player menu.
+    BackToSinglePlayer,
 }
 
 impl MenuAction {
     /// False for entries whose feature does not exist yet: shown dimmed, not clickable.
     pub fn is_available(self) -> bool {
-        !matches!(self, Self::Continue)
+        !matches!(self, Self::Continue | Self::CreateCharacter)
     }
 }
 
@@ -85,11 +94,22 @@ pub const SINGLE_PLAYER_ENTRIES: [(u32, MenuAction); 4] = [
     (54, MenuAction::Cancel),
 ];
 
+/// The New Game choice, top to bottom, with message ids in `MainMenu.mes` ("Pick New or
+/// Pregen": Pick Character, New Character, Cancel). Confirmed in Arcanum.exe: window record
+/// 0x5c4bb0 (table index 11, background 329 `MainMenuBack`, first id 420, 3 entries; buttons at
+/// 0x5c4b20 lead to the picker window 13 and character creation window 12).
+pub const NEW_GAME_CHOICE_ENTRIES: [(u32, MenuAction); 3] = [
+    (420, MenuAction::PickCharacter),
+    (421, MenuAction::CreateCharacter),
+    (422, MenuAction::BackToSinglePlayer),
+];
+
 /// The menu shown in `state`, if it is a menu.
 pub fn menu_entries(state: AppState) -> Option<&'static [(u32, MenuAction)]> {
     match state {
         AppState::MainMenu => Some(&MENU_ENTRIES),
         AppState::SinglePlayer => Some(&SINGLE_PLAYER_ENTRIES),
+        AppState::NewGameChoice => Some(&NEW_GAME_CHOICE_ENTRIES),
         _ => None,
     }
 }
@@ -146,6 +166,7 @@ impl Plugin for MainMenuPlugin {
             .add_systems(Startup, setup_menu)
             .add_systems(OnEnter(AppState::MainMenu), request_menu)
             .add_systems(OnEnter(AppState::SinglePlayer), request_menu)
+            .add_systems(OnEnter(AppState::NewGameChoice), request_menu)
             .add_systems(Update, (fit_background, spawn_menu.run_if(resource_exists::<PendingMenu>)))
             .add_observer(on_activate);
         if !app.is_plugin_added::<WidgetsPlugin>() {
@@ -284,7 +305,10 @@ fn on_activate(
         MenuAction::ExitGame => {
             exit.write(AppExit::Success);
         }
-        MenuAction::NewGame => next_state.set(AppState::NewGame),
+        MenuAction::NewGame => next_state.set(AppState::NewGameChoice),
+        MenuAction::PickCharacter => next_state.set(AppState::NewGame),
+        MenuAction::BackToSinglePlayer => next_state.set(AppState::SinglePlayer),
+        MenuAction::CreateCharacter => {}
         MenuAction::Cancel => next_state.set(AppState::MainMenu),
         MenuAction::LoadGame => next_state.set(AppState::LoadGame),
         MenuAction::Continue => {}

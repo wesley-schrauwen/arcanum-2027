@@ -70,7 +70,8 @@ fn spawn_placeholder(
 /// The screen Escape goes back to from `state`.
 pub fn back_from(state: AppState) -> AppState {
     match state {
-        AppState::LoadGame | AppState::NewGame => AppState::SinglePlayer,
+        AppState::LoadGame | AppState::NewGameChoice => AppState::SinglePlayer,
+        AppState::NewGame => AppState::NewGameChoice,
         _ => AppState::MainMenu,
     }
 }

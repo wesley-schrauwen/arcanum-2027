@@ -17,7 +17,7 @@ def walk(d,pos,bits=None):
             elif t=='str':
                 if d[pos]==0: v=None; pos+=1
                 else:
-                    ln,=struct.unpack_from('<I',d,pos+1); v=d[pos+5:pos+5+ln].decode('latin1'); pos+=5+ln
+                    ln,=struct.unpack_from('<I',d,pos+1); v=d[pos+5:pos+5+ln].decode('latin1'); assert d[pos+5+ln]==0; pos+=5+ln+1
             elif t=='sa':
                 f=d[pos]
                 if f==0: v=[]; pos+=1
