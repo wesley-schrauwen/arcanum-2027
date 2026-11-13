@@ -1,7 +1,7 @@
 names=[l.strip()[6:] for l in reversed(open(__import__('os').path.join(__import__('os').path.dirname(__file__) if '__file__' in globals() else '.', 'obj_field_names_reversed.txt')).read().split())]
 def ftype(n):
     if n in ('location','teleport_dest','critter_teleport_dest'): return 'i64'
-    if n in ('critter_fleeing_from','critter_gold','critter_arrows_obj'): return 'oid'
+    if n in ('critter_fleeing_from','critter_gold','critter_arrows','critter_bullets','critter_power_cells','critter_fuel'): return 'oid'
     if n=='pc_player_name': return 'str'
     if n in ('pc_global_flags','pc_global_variables'): return 'sa'
     if n.endswith('_idx') or n.endswith('ias_1') or n.endswith('ias_2') or n.endswith('i64as_1') or n in ('overlay_fore','overlay_back','underlay') or n.startswith('overlay_light_'): return 'sa'

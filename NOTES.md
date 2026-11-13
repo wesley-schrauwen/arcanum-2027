@@ -201,6 +201,13 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 
 ## New Game picker: research and plan (in progress)
 
+New Game first shows a text menu (`AppState::NewGameChoice`, built on the main menu panel):
+Pick Character / New Character / Cancel, `MainMenu.mes` 420-422. Confirmed in Arcanum.exe:
+window table at 0x5c3a40; record 0x5c4bb0 (index 11) has background 329, first id 420, count 3,
+buttons at 0x5c4b20 whose codes are window-table indexes (13 = pre-made picker 0x5c5270, 12 =
+character creation 0x5c4e28 with art 765, -2 = back). Single Player's buttons use codes 11, 7, 9.
+New Character is dimmed until character creation exists.
+
 Owner's decision: build it properly (option a), in three steps, each its own PR:
 1. **Multi-line `BitmapText`**: done (wrapping, real/escaped `\n`, `\t` indents, left/centre).
    Checked in a real-game screenshot with Lugard Bloodstone's story in the description panel;
@@ -273,14 +280,21 @@ What is known so far:
   reference (`u8 present` + 24-byte ObjectID); `pc_player_name` = string (`u8 present` + `u32 len`
   + bytes); everything else i32. With this table **all 12 `.mpc` parse to the exact byte**
   (`python3 tools/object_probe/walk2.py` from the scratch layout; it reads `players/*.mpc`).
-- **Prototypes (`data/proto/*.pro`) still drift:** header = version · prototype ObjectID (none) ·
-  ObjectID (kind 1, proto number) · `u32 type` · 20-byte bitmap at 56 · fields from 76, and they
-  store *every* field (not just bitmap bits). Common block and critter fields through
-  `effect_cause_idx` decode correctly; from `critter_gold` on it is off by about one byte
-  (likely object references or another field type differ in prototypes). Lugard's background
-  46 / story 1046 sit at offsets 890/894, name as a present-flagged string at 915. Open question
-  for the next step: find the prototype field encoding (REA on the proto read code, or more data).
-- Next: finish prototypes, mount `data/` in the VFS (proto + Players), then the Rust reader.
+- **Prototypes (`data/proto/*.pro`): solved; all 13 PC prototypes and all 12 `.mpc` parse to
+  the exact byte** with `tools/object_probe/walk2.py`. Rules: header = `u32 version` (0x77) ·
+  prototype ObjectID (none) · ObjectID (kind 1, proto number) · `u32 type` · 20-byte bitmap at 56
+  (a "fields set in this prototype" mask, bit layout as for instances; NOT a filter: walking only
+  set bits fails) · then **every** field of the type in enum order from offset 76.
+  Corrections to the name-based types: `critter_arrows/bullets/power_cells/fuel` are object
+  references like `critter_gold`. String fields = `u8 present` · `u32 len` · `len` bytes · a NUL
+  not counted in `len` (trailer strings in `.mpc` count their NUL instead).
+- **Pre-made data from the prototypes** (`016086` is the empty "create your own" template):
+  `description` = 16066 + index (the `0x3ec2 + index` the picker code uses); names, backgrounds
+  39-50 with story ids 1039-1050 (`mes/gameback.mes`), portraits 1002-1033, race = stat 27,
+  gender = stat 26. The two `.mpc` placeholder names are Clarisse Vorak (16097) and Ker'ee
+  Melange (16098) in the prototypes.
+- Next: mount `<ARCANUM_DIR>/data` in the VFS (proto, Players), then the Rust reader
+  (`arcanum_formats::object`), then fill the picker.
 
 ## Known issues / backlog (not started)
 
