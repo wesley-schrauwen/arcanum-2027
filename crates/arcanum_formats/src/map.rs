@@ -61,6 +61,11 @@ pub struct TileLoc {
 }
 
 impl TileLoc {
+    /// Decodes an object's packed `location` field: low 32 bits = x, high 32 bits = y.
+    pub fn from_packed(packed: i64) -> Self {
+        Self { x: packed as u32, y: ((packed as u64) >> 32) as u32 }
+    }
+
     pub fn sector(self) -> SectorId {
         SectorId::new(self.x / SECTOR_TILES, self.y / SECTOR_TILES)
     }
@@ -189,6 +194,17 @@ mod tests {
         let t = TileLoc { x: 92958, y: 82592 };
         assert_eq!(t.sector(), SectorId::new(1452, 1290));
         assert_eq!(t.tile_in_sector(), (30, 32));
+    }
+
+    #[test]
+    fn packed_location_is_x_low_y_high() {
+        // The prototype fixture's location 0x0086_0000_077c: y = 0x86, x = 0x77c.
+        assert_eq!(TileLoc::from_packed(0x0086_0000_077c), TileLoc { x: 0x77c, y: 0x86 });
+        assert_eq!(TileLoc::from_packed(0), TileLoc { x: 0, y: 0 });
+        // A y with the top bit set is not sign-extended into x or lost.
+        assert_eq!(TileLoc::from_packed(0x8000_0001_0000_0002u64 as i64), TileLoc { x: 2, y: 0x8000_0001 });
+        let t = TileLoc { x: 92958, y: 82592 };
+        assert_eq!(TileLoc::from_packed((t.y as i64) << 32 | t.x as i64), t);
     }
 
     fn list() -> Vec<MapEntry> {

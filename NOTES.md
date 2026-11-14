@@ -183,7 +183,7 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   (accessors 0x5036b0..0x503990, 0x504fd0). Facade ids (0xB) use other bits (0x504a60..0x504ad0);
   only the facade number is decoded (see "Art ids" below). **Unverified**: blocking-mask bit order (read as bit i%32 of word i/32 for tile i),
   light field meanings, sound list meaning, the tile flag bits.
-- **Objects (instances), all 18 types** (verified: every object in all 1668 `.sec` and all
+- **Objects (instances), all 18 types** (verified: every object in all 1680 `.sec` and all
   12,723 `.mob` in `Arcanum.dat` parses to the exact byte; layout table in `object.rs`). Reader
   `FUN_00406600` (0x406600): `u32 version` 0x77 · prototype ObjectID (24) · then, for kind != -1,
   `FUN_00409aa0` (0x409aa0): ObjectID (24) · `u32 type` · `u16 count` · `W` × u32 bitmap ·
@@ -208,7 +208,9 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
 - **Art ids → `.art` paths** (`crates/arcanum_formats/src/art_id.rs`; all rules, bit layouts and
   Arcanum.exe addresses are in its top doc comment). Verified over the 621 start-map sectors: 2.54 M
   tile ids, 28,064 walls, 1,588 portals, 117,385 scenery, 1,012 lights, 6,483 roofs all resolve to
-  files that exist (one scenery object has `current_aid` 0xFFFFFFFF = no art). Type = `id >> 28`
+  files that exist. Not covered: one scenery object with `current_aid` 0xFFFFFFFF (no art) and
+  3,799 of 121,185 scenery objects with no instance `current_aid` (prototype fallback, see
+  "Known issues"). Type = `id >> 28`
   (0x502700): 0 tile, 1 wall, 3 portal, 4 scenery, 9 light, 0xA roof, 0xB facade (sector "tiles"
   of type 0xB); critter 2, item 6, container 7, monster 0xC, unique npc 0xD, interface 5 and eye
   candy 0xE are not decoded. Index files (`ART_INDEX_FILES`): `art/tile/tilename.mes` (four lists
@@ -369,6 +371,14 @@ What is known so far:
   (`arcanum_formats::object`), then fill the picker.
 
 ## Known issues / backlog (not started)
+
+- Sector objects: instance fields fall back to the prototype when the instance bitmap omits them
+  (3,799 of 121,185 start-map scenery objects have no `current_aid`). `Object::parse_prototype`
+  only supports pc. Wall, portal and scenery prototype parsing is needed before the art step
+  (so every object resolves art) and the blocking step (prototype flags).
+- Blocking: `Sector::blocked` is only the tile blocking mask (`None` for version < 4: 32 of 621
+  start-map sectors; sparse: 172 of 621 set any bit, the start sector none). Objects (walls,
+  scenery, closed portals) block as well and are not decoded for blocking yet.
 
 - Sprites use linear filtering, so scaled 800x600 art looks soft. Consider nearest or a scaler.
 - Windows narrower than 4:3 crop the menu art (they are rejected by resolution validation anyway).

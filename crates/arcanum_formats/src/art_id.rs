@@ -3,9 +3,12 @@
 //! An art id is a `u32`. Bits 28..31 are the art type (accessor 0x502700 in Arcanum.exe); the
 //! engine's id -> path dispatcher ends at 0x41dfa9. `0xFFFFFFFF` means "no art" ([`ArtId::NONE`]).
 //! Every rule below was found in the exe and then checked against the shipped data: all 2.54 M
-//! tile ids, 28,064 walls, 1,588 portals, 117,386 scenery objects, 1,012 lights and 6,483 roofs of
-//! the 621 start-map sectors resolve to files that exist (the sole exception is one scenery object
-//! whose id is `0xFFFFFFFF`). That only proves the file exists, so the engine code is the evidence
+//! tile ids, 28,064 walls, 1,588 portals, 117,385 scenery objects, 1,012 lights and 6,483 roofs of
+//! the 621 start-map sectors resolve to files that exist. Not covered: one scenery object whose
+//! `current_aid` is `0xFFFFFFFF` (no art), and the 3,799 of 121,185 scenery objects that store no
+//! instance `current_aid` at all (the engine falls back to the prototype's value; prototypes of
+//! walls, portals and scenery are not parsed yet, so their art is unchecked and
+//! [`Object::art_id`](crate::object::Object::art_id) returns `None` for them). That only proves the file exists, so the engine code is the evidence
 //! for each rule; negative tests (a swapped wall token leaves 616 of 3,157 wall ids without a
 //! file) back the ones that could be guessed wrong.
 //!
@@ -230,7 +233,7 @@ impl ArtId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtIndexError {
     /// An index file is not in the archives.
     Missing(&'static str),

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use arcanum_formats::art_id::{ArtId, ArtIndex};
 use arcanum_formats::map::{MAP_LIST, MapProperties, SectorId, TileLoc, parse_map_list, start_map};
 use arcanum_formats::mes::MesFile;
-use arcanum_formats::object::Object;
+use arcanum_formats::object::{Object, Value};
 use arcanum_formats::sector::Sector;
 use arcanum_vfs::{ArcanumArchive, Vfs};
 
@@ -169,6 +169,22 @@ fn start_sector_parses_to_the_byte() {
     eprintln!("start sector: version {}, {} lights, {} objects", sector.version, sector.lights.len(), sector.objects.len());
 }
 
+/// Every object's `location` in the start sector decodes to a tile inside that sector.
+#[test]
+fn start_sector_object_locations_are_inside_it() {
+    let Some(vfs) = vfs() else { return };
+    let id = SectorId(86_570_436_012);
+    let sector = Sector::parse(&vfs.read(&format!("maps/Arcanum1-024-fixed/{}", id.file_name())).unwrap()).unwrap();
+    let mut located = 0;
+    for o in &sector.objects {
+        let Some(Value::Int64(Some(packed))) = o.field("location") else { continue };
+        assert_eq!(TileLoc::from_packed(*packed).sector(), id, "object type {}", o.object_type);
+        located += 1;
+    }
+    assert!(located > 0);
+    eprintln!("start sector: {located} of {} objects have a location", sector.objects.len());
+}
+
 /// Every object in all 621 start-map sectors parses (through the VFS, so with the patch).
 #[test]
 fn start_map_sector_objects_parse() {
@@ -246,28 +262,34 @@ fn check_art(vfs: &Vfs, index: &ArtIndex, cache: &mut HashMap<u32, Option<String
     }
 }
 
-/// Checks every tile, roof, light and object art id of `sectors`; returns the stats per kind.
-fn art_stats(vfs: &Vfs, sectors: &[String]) -> BTreeMap<String, ArtStats> {
+/// Checks every tile, roof, light and object art id of `sectors`; returns the stats per kind and,
+/// per object type, how many objects have no instance `current_aid` (the engine falls back to
+/// the prototype's value for those, which is not decoded yet, so their art is not checked).
+fn art_stats(vfs: &Vfs, sectors: &[String]) -> (BTreeMap<String, ArtStats>, BTreeMap<u32, usize>) {
     let index = art_index(vfs);
     let (mut cache, mut stats) = (HashMap::new(), BTreeMap::new());
+    let mut no_aid = BTreeMap::new();
     for path in sectors {
         let sector = Sector::parse(&vfs.read(path).unwrap()).unwrap_or_else(|e| panic!("{path}: {e}"));
         for t in sector.tiles.iter() {
             check_art(vfs, &index, &mut cache, &mut stats, t.art_id());
         }
         // Roof ids of 0xFFFFFFFF are empty cells, not missing art.
-        for r in sector.roofs.iter().flat_map(|r| r.iter()).filter(|r| **r != ArtId::NONE.0) {
-            check_art(vfs, &index, &mut cache, &mut stats, ArtId(*r));
+        for r in sector.roofs.iter().flat_map(|r| r.iter()).filter(|r| **r != ArtId::NONE) {
+            check_art(vfs, &index, &mut cache, &mut stats, *r);
         }
         for l in &sector.lights {
-            check_art(vfs, &index, &mut cache, &mut stats, ArtId(l.art_id));
+            check_art(vfs, &index, &mut cache, &mut stats, l.art_id);
         }
         // Traps store no art id.
-        for id in sector.objects.iter().filter(|o| o.object_type != 17).filter_map(Object::art_id) {
-            check_art(vfs, &index, &mut cache, &mut stats, id);
+        for o in sector.objects.iter().filter(|o| o.object_type != 17) {
+            match o.art_id() {
+                Some(id) => check_art(vfs, &index, &mut cache, &mut stats, id),
+                None => *no_aid.entry(o.object_type).or_insert(0) += 1,
+            }
         }
     }
-    stats
+    (stats, no_aid)
 }
 
 fn report(label: &str, stats: &BTreeMap<String, ArtStats>) -> usize {
@@ -298,21 +320,45 @@ fn start_area_art_resolves() {
             sectors.push(format!("maps/Arcanum1-024-fixed/{}", id.file_name()));
         }
     }
-    let stats = art_stats(&vfs, &sectors);
+    let (stats, _) = art_stats(&vfs, &sectors);
     assert_eq!(report("start area", &stats), 0);
     assert!(stats["Tile"].resolved > 0 && stats["Facade"].resolved > 0 && stats["Scenery"].resolved > 0);
 }
 
-/// All 621 sectors. Observed: 0 unresolved and 0 missing; the only id without art is one scenery
-/// object with `current_aid = 0xFFFFFFFF`.
+/// All 621 sectors. Observed: 0 unresolved and 0 missing among the ids that are stored; one
+/// scenery object has `current_aid = 0xFFFFFFFF`. Objects with no instance `current_aid` at all
+/// are counted separately: their art comes from the prototype, which is not decoded yet.
 #[test]
 fn start_map_art_coverage() {
     let Some(vfs) = vfs() else { return };
     let sectors: Vec<String> =
         vfs.list_dir("maps/Arcanum1-024-fixed").unwrap().into_iter().filter(|p| p.to_ascii_lowercase().ends_with(".sec")).collect();
     assert_eq!(sectors.len(), 621);
-    let stats = art_stats(&vfs, &sectors);
+    let (stats, no_aid) = art_stats(&vfs, &sectors);
+    eprintln!("objects without an instance current_aid, by type: {no_aid:?}");
+    // Scenery (type 3) only; walls (0) and portals (1) always store one.
+    assert_eq!(no_aid, BTreeMap::from([(3, 3799)]));
     assert_eq!(report("start map", &stats), 0);
     assert_eq!(stats["Tile"].resolved + stats["Facade"].resolved, 621 * 4096);
     assert_eq!(stats.values().map(|s| s.no_art).sum::<usize>(), 1);
+}
+
+/// The tile blocking mask exists from version 4 on and is sparse: it is not the whole story for
+/// blocking. Observed over the 621 start-map sectors: 32 have no mask, 172 set any bit.
+#[test]
+fn start_map_tile_mask_presence() {
+    let Some(vfs) = vfs() else { return };
+    let files: Vec<String> =
+        vfs.list_dir("maps/Arcanum1-024-fixed").unwrap().into_iter().filter(|p| p.to_ascii_lowercase().ends_with(".sec")).collect();
+    let (mut none, mut any_set) = (0, 0);
+    for path in &files {
+        let sector = Sector::parse(&vfs.read(path).unwrap()).unwrap_or_else(|e| panic!("{path}: {e}"));
+        assert_eq!(sector.blocked.is_none(), sector.version < 4, "{path}");
+        match &sector.blocked {
+            None => none += 1,
+            Some(m) => any_set += usize::from(m.iter().any(|w| *w != 0)),
+        }
+    }
+    eprintln!("no mask {none}, mask with any bit set {any_set}");
+    assert_eq!((none, any_set), (32, 172));
 }

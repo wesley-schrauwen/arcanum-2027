@@ -345,7 +345,7 @@ impl SectorBuilder {
         for l in &self.lights {
             let start = out.len();
             out.extend(l.handle.to_le_bytes());
-            u32s(&mut out, &[l.x as u32, l.y as u32, l.offset_x as u32, l.offset_y as u32, l.flags, l.art_id]);
+            u32s(&mut out, &[l.x as u32, l.y as u32, l.offset_x as u32, l.offset_y as u32, l.flags, l.art_id.0]);
             out.extend(l.color);
             out.resize(start + sector::LIGHT_SIZE, 0);
         }

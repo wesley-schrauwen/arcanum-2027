@@ -133,8 +133,8 @@ pub enum ObjectError {
     UnsupportedType(u32),
     /// A presence byte that is neither 0 nor 1.
     BadFlag { offset: usize, field: &'static str, value: u8 },
-    /// Bytes left over after the last field.
-    TrailingBytes { offset: usize, len: usize },
+    /// Bytes left over after the last field; `total` is the whole data's length.
+    TrailingBytes { offset: usize, total: usize },
     BadBitmap { declared: u16, set: u32 },
     /// `set` bitmap bits are set but only `known` belong to fields of the type.
     UnknownBits { set: u32, known: u32 },
@@ -148,9 +148,9 @@ impl fmt::Display for ObjectError {
             Self::BadVersion(v) => write!(f, "unsupported object version {v:#x} (expected {VERSION:#x})"),
             Self::UnsupportedType(t) => write!(f, "object type {t} is not supported"),
             Self::BadFlag { offset, field, value } => write!(f, "{field}: presence byte {value} at offset {offset}"),
-            Self::TrailingBytes { offset, len } => write!(f, "{} bytes left over after the last field (offset {offset})", len - offset),
+            Self::TrailingBytes { offset, total } => write!(f, "{} bytes left over after the last field (offset {offset}, {total} bytes in all)", total - offset),
             Self::BadBitmap { declared, set } => write!(f, "field count {declared} does not match {set} bits set"),
-            Self::UnknownBits { set, known } => write!(f, "{set} bitmap bits set but only {known} name fields of the type"),
+            Self::UnknownBits { set, known } => write!(f, "{set} bitmap bits set but only {known} named fields of the type"),
             Self::BadString { offset } => write!(f, "string at offset {offset} is not terminated"),
         }
     }
@@ -287,7 +287,7 @@ impl Object {
     pub fn parse_instance(data: &[u8]) -> Result<Self, ObjectError> {
         let (object, used) = Self::parse_instance_prefix(data)?;
         if used != data.len() {
-            return Err(ObjectError::TrailingBytes { offset: used, len: data.len() });
+            return Err(ObjectError::TrailingBytes { offset: used, total: data.len() });
         }
         Ok(object)
     }
@@ -478,7 +478,7 @@ impl<'a> Reader<'a> {
     }
 
     fn finish(&self) -> Result<(), ObjectError> {
-        if self.pos == self.data.len() { Ok(()) } else { Err(ObjectError::TrailingBytes { offset: self.pos, len: self.data.len() }) }
+        if self.pos == self.data.len() { Ok(()) } else { Err(ObjectError::TrailingBytes { offset: self.pos, total: self.data.len() }) }
     }
 }
 
@@ -574,7 +574,7 @@ mod tests {
         for block in [&COMMON_FIELDS[..], &CRITTER_FIELDS[..], &PC_FIELDS[..]] {
             assert!(block.windows(2).all(|w| w[1].id == w[0].id + 1));
         }
-        // Every block fits its 64-bit range of the bitmap.
+        // Every field's bitmap bit is below 5 * 32: the bitmap is 32-bit words, blocks start on word boundaries.
         assert!(all_defs().iter().all(|(bit, _)| (*bit as usize) < 5 * 32));
     }
 
@@ -773,7 +773,7 @@ mod tests {
         assert_eq!((b.object_type, used2), (TYPE_TRAP, second.len()));
         assert_eq!(b.art_id(), None);
         // parse_instance insists on the exact length.
-        assert_eq!(Object::parse_instance(&both), Err(ObjectError::TrailingBytes { offset: first.len(), len: both.len() }));
+        assert_eq!(Object::parse_instance(&both), Err(ObjectError::TrailingBytes { offset: first.len(), total: both.len() }));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! Loader: the function at 0x4d1a40 in Arcanum.exe (called from the sector cache, `FUN_004d0540`
 //! at 0x4d0540); file name `"%s\%I64u.sec"` (0x5b7e6c, built by `FUN_004d04a0`). Blocks in file
-//! order, little endian, verified on all 1668 `.sec` in `Arcanum.dat` (every one parses to the
+//! order, little endian, verified on all 1680 `.sec` in `Arcanum.dat` (every one parses to the
 //! exact last byte):
 //!
 //! | Size | Block | Engine reader |
@@ -60,8 +60,8 @@ pub enum SectorError {
     Object { index: usize, offset: usize, error: ObjectError },
     /// The `u32` after the objects is not the object count at EOF-4.
     CountMismatch { declared: u32, after_objects: u32 },
-    /// Bytes left over after the trailing object count.
-    TrailingBytes { offset: usize, len: usize },
+    /// Bytes left over after the trailing object count; `total` is the whole file's length.
+    TrailingBytes { offset: usize, total: usize },
 }
 
 impl fmt::Display for SectorError {
@@ -73,7 +73,7 @@ impl fmt::Display for SectorError {
             Self::CountMismatch { declared, after_objects } => {
                 write!(f, "object count {declared} at the end of the file, but {after_objects} after the objects")
             }
-            Self::TrailingBytes { offset, len } => write!(f, "{} bytes left over at offset {offset}", len - offset),
+            Self::TrailingBytes { offset, total } => write!(f, "{} bytes left over at offset {offset} (file is {total} bytes)", total - offset),
         }
     }
 }
@@ -81,8 +81,10 @@ impl fmt::Display for SectorError {
 impl std::error::Error for SectorError {}
 
 /// A tile's art id (TIG art type in bits 28..31). Sector tiles are type 0 (tile) or 0xB (facade).
-/// The accessors below decode type 0 (accessors 0x5036b0..0x503990 in Arcanum.exe); facade ids
-/// use other bits.
+/// The accessors below decode type 0 (accessors 0x5036b0..0x503990 in Arcanum.exe) and are
+/// meaningless for facade tiles ([`Tile::is_facade`]), whose ids use other bits (see `art_id`).
+/// Bits 6..8 are the outdoor flag (bit 8) and the name-1 / name-2 flippable flags (bits 7 and 6),
+/// as `art_id` uses them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Tile(pub u32);
 
@@ -104,32 +106,34 @@ impl Tile {
         self.art_type() == Self::ART_TYPE_FACADE
     }
 
-    /// First terrain: index into `art/tile/tilename.mes`, bits 22..27 (0x5036b0).
+    /// Type 0 tiles only. First terrain: index into `art/tile/tilename.mes`, bits 22..27 (0x5036b0).
     pub fn terrain_1(self) -> u32 {
         (self.0 >> 22) & 0x3f
     }
 
-    /// Second terrain (equal to the first on plain tiles), bits 16..21 (0x5036e0).
+    /// Type 0 tiles only. Second terrain (equal to the first on plain tiles), bits 16..21 (0x5036e0).
     pub fn terrain_2(self) -> u32 {
         (self.0 >> 16) & 0x3f
     }
 
-    /// Edge/corner mask 0..15, bits 12..15 (0x503700): 0 = only terrain 2, 15 = only terrain 1.
+    /// Type 0 tiles only. Edge/corner mask 0..15, bits 12..15 (0x503700): 0 = only terrain 2, 15 = only terrain 1.
     pub fn edge(self) -> u32 {
         (self.0 >> 12) & 0xf
     }
 
-    /// Variation 0..7, bits 9..11 (0x5037b0).
+    /// Type 0 tiles only. Variation 0..7, bits 9..11 (0x5037b0).
     pub fn variation(self) -> u32 {
         (self.0 >> 9) & 0x7
     }
 
-    /// Flag bits 6..8 as a 3-bit value (tested by 0x503990, 0x503950, 0x5038c0; meaning unknown).
+    /// Type 0 tiles only. Flag bits 6..8 as a 3-bit value (tested by 0x503990, 0x503950, 0x5038c0):
+    /// bit 2 = outdoor (bit 8 of the id), bit 1 = name-1 flippable (bit 7), bit 0 = name-2
+    /// flippable (bit 6), the meanings `art_id` uses for the path.
     pub fn flags(self) -> u32 {
         (self.0 >> 6) & 0x7
     }
 
-    /// Bit 0, the flip bit (0x504fd0). Set in many transition tiles; the file name ignores it (see `art_id`).
+    /// Type 0 tiles only. Bit 0, the flip bit (0x504fd0). Set in many transition tiles; the file name ignores it (see `art_id`).
     pub fn is_flipped(self) -> bool {
         self.0 & 1 == 1
     }
@@ -150,7 +154,7 @@ pub struct Light {
     /// +0x18.
     pub flags: u32,
     /// +0x1c, a light art id (art type 9).
-    pub art_id: u32,
+    pub art_id: ArtId,
     /// +0x20, red, green, blue.
     pub color: [u8; 3],
 }
@@ -172,14 +176,20 @@ pub struct TileScript {
     pub script: ScriptHeader,
 }
 
-/// A parsed sector. Blocks a file's version does not have are zero.
+/// A parsed sector. Blocks a file's version does not have are zero (or `None`).
+///
+/// Blocking: [`Sector::blocked`] is only the sector's tile blocking mask. It is sparse (172 of
+/// the 621 start-map sectors set any bit) and object blocking (walls, scenery, closed portals and
+/// their prototype flags) is separate and not decoded yet, so a pathfinder cannot use the mask
+/// alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sector {
     pub lights: Vec<Light>,
     /// Row-major: tile `(x, y)` is at `y * 64 + x`.
     pub tiles: Box<[Tile; TILE_COUNT]>,
-    /// `None` when the file stores the "no roofs" flag (the engine fills every roof with -1).
-    pub roofs: Option<Box<[u32; ROOF_COUNT]>>,
+    /// 16 x 16 roof art ids, row-major, [`ArtId::NONE`] for an empty cell. `None` when the file
+    /// stores the "no roofs" flag (the engine fills every roof with -1).
+    pub roofs: Option<Box<[ArtId; ROOF_COUNT]>>,
     /// 0..=4 (the low byte of the version word).
     pub version: u32,
     /// Version >= 1.
@@ -191,8 +201,10 @@ pub struct Sector {
     pub aptitude_adjustment: i32,
     pub light_scheme: u32,
     pub sound_list: [u32; 3],
-    /// Version >= 4: 4096-bit mask, bit `i % 32` of word `i / 32` = tile `i` (bit order unverified).
-    pub blocked: Box<[u32; BLOCKED_WORDS]>,
+    /// Version >= 4: 4096-bit tile blocking mask, bit `i % 32` of word `i / 32` = tile `i` (bit
+    /// order unverified). `None` for older versions (no mask in the file, which is not the same
+    /// as nothing blocked). Tiles only: object blocking is not included.
+    pub blocked: Option<Box<[u32; BLOCKED_WORDS]>>,
     /// Walls, portals, scenery and traps.
     pub objects: Vec<Object>,
 }
@@ -213,7 +225,7 @@ impl Sector {
 
         let roofs = if r.u32("roof flag")? == 0 {
             let roof_bytes = r.bytes(ROOF_COUNT * 4, "roofs")?;
-            Some(words(roof_bytes).collect::<Vec<_>>().into_boxed_slice().try_into().unwrap())
+            Some(words(roof_bytes).map(ArtId).collect::<Vec<_>>().into_boxed_slice().try_into().unwrap())
         } else {
             None
         };
@@ -250,12 +262,10 @@ impl Sector {
             light_scheme = r.u32("light scheme")?;
             sound_list = [r.u32("sound list")?, r.u32("sound list")?, r.u32("sound list")?];
         }
-        let mut blocked = Box::new([0u32; BLOCKED_WORDS]);
+        let mut blocked = None;
         if version >= 4 {
             let bytes = r.bytes(BLOCKED_WORDS * 4, "tile blocking")?;
-            for (dst, w) in blocked.iter_mut().zip(words(bytes)) {
-                *dst = w;
-            }
+            blocked = Some(words(bytes).collect::<Vec<_>>().into_boxed_slice().try_into().unwrap());
         }
 
         // An object takes at least 58 bytes; do not trust a corrupt count for the allocation.
@@ -272,7 +282,7 @@ impl Sector {
             return Err(SectorError::CountMismatch { declared, after_objects });
         }
         if r.pos != data.len() {
-            return Err(SectorError::TrailingBytes { offset: r.pos, len: data.len() });
+            return Err(SectorError::TrailingBytes { offset: r.pos, total: data.len() });
         }
         Ok(Self {
             lights,
@@ -295,10 +305,12 @@ impl Sector {
         self.tiles[tile_index(x, y)]
     }
 
-    /// Whether the blocking mask marks `(x, y)`, both `< 64`.
-    pub fn is_blocked(&self, x: u32, y: u32) -> bool {
+    /// Whether the tile blocking mask marks `(x, y)`, both `< 64`; `None` when the file has no
+    /// mask (version < 4). This is the tile mask only: walls, scenery, closed portals and their
+    /// prototype flags block too and are not decoded yet, so `Some(false)` does not mean walkable.
+    pub fn tile_mask_blocked(&self, x: u32, y: u32) -> Option<bool> {
         let i = tile_index(x, y);
-        self.blocked[i / 32] >> (i % 32) & 1 == 1
+        self.blocked.as_ref().map(|m| m[i / 32] >> (i % 32) & 1 == 1)
     }
 }
 
@@ -315,7 +327,7 @@ fn read_light(b: &[u8]) -> Light {
         offset_x: w[2] as i32,
         offset_y: w[3] as i32,
         flags: w[4],
-        art_id: w[5],
+        art_id: ArtId(w[5]),
         color: [b[0x20], b[0x21], b[0x22]],
     }
 }
@@ -381,7 +393,8 @@ mod tests {
                 (s.townmap_info, s.aptitude_adjustment, s.light_scheme, s.sound_list),
                 if version >= 3 { (12, -20, 9, [1, 2, 3]) } else { (0, 0, 0, [0; 3]) }
             );
-            assert_eq!(s.is_blocked(63, 63), version >= 4);
+            assert_eq!(s.tile_mask_blocked(63, 63), (version >= 4).then_some(true));
+            assert_eq!(s.blocked.is_some(), version >= 4);
         }
     }
 
@@ -395,7 +408,7 @@ mod tests {
 
     #[test]
     fn lights_are_read() {
-        let light = Light { handle: 0, x: 194, y: 82, offset_x: -3, offset_y: 7, flags: 0x18, art_id: 0x9028_0000, color: [255, 128, 1] };
+        let light = Light { handle: 0, x: 194, y: 82, offset_x: -3, offset_y: 7, flags: 0x18, art_id: ArtId(0x9028_0000), color: [255, 128, 1] };
         let data = SectorBuilder { lights: vec![light, Light::default()], ..SectorBuilder::new() }.build();
         let s = Sector::parse(&data).unwrap();
         assert_eq!(s.lights, vec![light, Light::default()]);
@@ -415,8 +428,8 @@ mod tests {
 
     #[test]
     fn roofs_follow_the_empty_flag() {
-        let roofs: Vec<u32> = (0..256).map(|i| 0x1000 + i).collect();
-        let s = Sector::parse(&SectorBuilder { roofs: Some(roofs.clone()), ..SectorBuilder::new() }.build()).unwrap();
+        let roofs: Vec<ArtId> = (0..256).map(|i| ArtId(0x1000 + i)).collect();
+        let s = Sector::parse(&SectorBuilder { roofs: Some(roofs.iter().map(|r| r.0).collect()), ..SectorBuilder::new() }.build()).unwrap();
         assert_eq!(s.roofs.as_deref().map(|r| r.to_vec()), Some(roofs));
     }
 
@@ -426,8 +439,8 @@ mod tests {
         // Tile (5, 1) = index 69 = word 2, bit 5.
         b.blocked[2] = 1 << 5;
         let s = Sector::parse(&b.build()).unwrap();
-        assert!(s.is_blocked(5, 1));
-        let blocked: Vec<_> = (0..64).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| s.is_blocked(x, y)).collect();
+        assert_eq!(s.tile_mask_blocked(5, 1), Some(true));
+        let blocked: Vec<_> = (0..64).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| s.tile_mask_blocked(x, y) == Some(true)).collect();
         assert_eq!(blocked, vec![(5, 1)]);
     }
 
@@ -488,7 +501,7 @@ mod tests {
         let mut data = SectorBuilder::new().build();
         let len = data.len();
         data.extend(0u32.to_le_bytes());
-        assert_eq!(Sector::parse(&data), Err(SectorError::TrailingBytes { offset: len, len: len + 4 }));
+        assert_eq!(Sector::parse(&data), Err(SectorError::TrailingBytes { offset: len, total: len + 4 }));
     }
 
     #[test]
