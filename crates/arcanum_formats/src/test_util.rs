@@ -1,4 +1,7 @@
-//! Builds synthetic `.art` files so tests do not depend on the game data.
+//! Builds synthetic `.art`, object and sector files so tests do not depend on the game data.
+
+use crate::object::{self, Array, ObjectId, Storage, Value};
+use crate::sector::{self, Light, ScriptHeader, TileScript};
 
 /// One stored frame: its header fields and the bytes exactly as they appear in the file.
 #[derive(Clone, Debug)]
@@ -159,4 +162,228 @@ pub fn font_art(line_height: u32) -> Vec<u8> {
     b.rotations[0].extend((1..225).map(frame));
     b.palettes = [Some((0..=255u8).map(|i| [i, i, i, 0]).collect()), None, None, None];
     b.build()
+}
+
+/// Writes a 24-byte ObjectID: `i16 kind`, 6 pad bytes, the 16-byte payload.
+pub fn object_id_bytes(id: &ObjectId) -> [u8; 24] {
+    let mut out = [0u8; 24];
+    out[..2].copy_from_slice(&id.kind.to_le_bytes());
+    out[8..].copy_from_slice(&id.payload);
+    out
+}
+
+/// A prototype ObjectID for prototype `number`.
+pub fn prototype_id(number: u32) -> ObjectId {
+    let mut payload = [0u8; 16];
+    payload[..4].copy_from_slice(&number.to_le_bytes());
+    ObjectId { kind: ObjectId::KIND_PROTOTYPE, payload }
+}
+
+/// Writes one field value in its storage encoding. Panics if the value does not fit `storage`.
+pub fn value_bytes(storage: Storage, value: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    match (storage, value) {
+        (Storage::Int32, Value::Int32(v)) => out.extend(v.to_le_bytes()),
+        (Storage::Int64, Value::Int64(v)) => match v {
+            Some(v) => {
+                out.push(1);
+                out.extend(v.to_le_bytes());
+            }
+            None => out.push(0),
+        },
+        (Storage::ObjectRef, Value::ObjectRef(v)) => match v {
+            Some(id) => {
+                out.push(1);
+                out.extend(object_id_bytes(id));
+            }
+            None => out.push(0),
+        },
+        (Storage::String, Value::String(v)) => match v {
+            Some(s) => {
+                out.push(1);
+                out.extend((s.len() as u32).to_le_bytes());
+                out.extend(s.as_bytes());
+                out.push(0);
+            }
+            None => out.push(0),
+        },
+        (Storage::Array, Value::Array(v)) => match v {
+            Some(Array { elem_size, id, data, bitset }) => {
+                out.push(1);
+                out.extend(elem_size.to_le_bytes());
+                out.extend((data.len() as u32 / elem_size).to_le_bytes());
+                out.extend(id.to_le_bytes());
+                out.extend(data);
+                out.extend((bitset.len() as u32).to_le_bytes());
+                out.extend(bitset.iter().flat_map(|w| w.to_le_bytes()));
+            }
+            None => out.push(0),
+        },
+        (s, v) => panic!("{v:?} is not stored as {s:?}"),
+    }
+    out
+}
+
+/// Writes instance objects (the sector / `.mob` / `.mpc` encoding): header, field count, bitmap,
+/// then the given fields in bitmap order.
+#[derive(Clone, Debug)]
+pub struct ObjectBuilder {
+    pub object_type: u32,
+    pub prototype: ObjectId,
+    pub id: ObjectId,
+    /// Fields by name; their order here does not matter.
+    pub fields: Vec<(&'static str, Value)>,
+    /// Bits to set in the bitmap without writing a value (for malformed objects).
+    pub extra_bits: Vec<u32>,
+}
+
+impl ObjectBuilder {
+    /// An object of `object_type` with prototype 1 and an all-zero own id (kind 0, as in sectors).
+    pub fn new(object_type: u32) -> Self {
+        Self { object_type, prototype: prototype_id(1), id: ObjectId { kind: 0, payload: [0; 16] }, fields: Vec::new(), extra_bits: Vec::new() }
+    }
+
+    pub fn field(mut self, name: &'static str, value: Value) -> Self {
+        self.fields.push((name, value));
+        self
+    }
+
+    /// The bytes. Panics if a field name is not a field of the type.
+    pub fn build(&self) -> Vec<u8> {
+        let bits = object::field_bits(self.object_type).expect("known object type");
+        let words = object::bitmap_words(self.object_type).unwrap();
+        let mut bitmap = vec![0u32; words];
+        let mut values: Vec<(u32, Vec<u8>)> = Vec::new();
+        for (name, value) in &self.fields {
+            let (bit, def) = bits.iter().find(|(_, d)| d.name == *name).unwrap_or_else(|| panic!("{name} is not a field of type {}", self.object_type));
+            bitmap[*bit as usize / 32] |= 1 << (bit % 32);
+            values.push((*bit, value_bytes(def.storage, value)));
+        }
+        for bit in &self.extra_bits {
+            bitmap[*bit as usize / 32] |= 1 << (bit % 32);
+        }
+        values.sort_by_key(|(bit, _)| *bit);
+        let mut out = object::VERSION.to_le_bytes().to_vec();
+        out.extend(object_id_bytes(&self.prototype));
+        out.extend(object_id_bytes(&self.id));
+        out.extend(self.object_type.to_le_bytes());
+        let count: u32 = bitmap.iter().map(|w| w.count_ones()).sum();
+        out.extend((count as u16).to_le_bytes());
+        out.extend(bitmap.iter().flat_map(|w| w.to_le_bytes()));
+        for (_, v) in values {
+            out.extend(v);
+        }
+        out
+    }
+}
+
+/// Writes `.sec` files in the layout `Sector::parse` reads.
+#[derive(Clone, Debug)]
+pub struct SectorBuilder {
+    pub lights: Vec<Light>,
+    /// 4096 tile art ids, row-major.
+    pub tiles: Vec<u32>,
+    /// 256 roof art ids, or `None` to write the "no roofs" flag.
+    pub roofs: Option<Vec<u32>>,
+    /// 0..=4; selects which blocks are written.
+    pub version: u32,
+    /// Overrides the version word (`0x00AA0000 + version`), for malformed files.
+    pub version_word: Option<u32>,
+    pub tile_scripts: Vec<TileScript>,
+    pub script: ScriptHeader,
+    pub townmap_info: u32,
+    pub aptitude_adjustment: i32,
+    pub light_scheme: u32,
+    pub sound_list: [u32; 3],
+    /// 128 words.
+    pub blocked: Vec<u32>,
+    /// Encoded objects (see [`ObjectBuilder`]).
+    pub objects: Vec<Vec<u8>>,
+    /// Overrides both object counts (default: `objects.len()`).
+    pub count: Option<u32>,
+}
+
+impl Default for SectorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SectorBuilder {
+    /// A version 4 sector: no lights, zero tiles, no roofs, no scripts, nothing blocked, no objects.
+    pub fn new() -> Self {
+        Self {
+            lights: Vec::new(),
+            tiles: vec![0; sector::TILE_COUNT],
+            roofs: None,
+            version: sector::MAX_VERSION,
+            version_word: None,
+            tile_scripts: Vec::new(),
+            script: ScriptHeader::default(),
+            townmap_info: 0,
+            aptitude_adjustment: 0,
+            light_scheme: 0,
+            sound_list: [0; 3],
+            blocked: vec![0; sector::BLOCKED_WORDS],
+            objects: Vec::new(),
+            count: None,
+        }
+    }
+
+    /// Where the first object starts in [`build`](Self::build)'s output.
+    pub fn objects_offset(&self) -> usize {
+        self.header().len()
+    }
+
+    /// Everything before the objects.
+    fn header(&self) -> Vec<u8> {
+        assert_eq!(self.tiles.len(), sector::TILE_COUNT);
+        assert_eq!(self.blocked.len(), sector::BLOCKED_WORDS);
+        let mut out = Vec::new();
+        let u32s = |out: &mut Vec<u8>, vals: &[u32]| out.extend(vals.iter().flat_map(|v| v.to_le_bytes()));
+        u32s(&mut out, &[self.lights.len() as u32]);
+        for l in &self.lights {
+            let start = out.len();
+            out.extend(l.handle.to_le_bytes());
+            u32s(&mut out, &[l.x as u32, l.y as u32, l.offset_x as u32, l.offset_y as u32, l.flags, l.art_id.0]);
+            out.extend(l.color);
+            out.resize(start + sector::LIGHT_SIZE, 0);
+        }
+        u32s(&mut out, &self.tiles);
+        match &self.roofs {
+            Some(r) => {
+                assert_eq!(r.len(), sector::ROOF_COUNT);
+                u32s(&mut out, &[0]);
+                u32s(&mut out, r);
+            }
+            None => u32s(&mut out, &[1]),
+        }
+        u32s(&mut out, &[self.version_word.unwrap_or(sector::VERSION_BASE + self.version)]);
+        if self.version >= 1 {
+            u32s(&mut out, &[self.tile_scripts.len() as u32]);
+            for t in &self.tile_scripts {
+                u32s(&mut out, &[t.node_flags, t.tile, t.script.flags, t.script.counters, t.script.number, 0xdead_beef]);
+            }
+        }
+        if self.version >= 2 {
+            u32s(&mut out, &[self.script.flags, self.script.counters, self.script.number]);
+        }
+        if self.version >= 3 {
+            u32s(&mut out, &[self.townmap_info, self.aptitude_adjustment as u32, self.light_scheme]);
+            u32s(&mut out, &self.sound_list);
+        }
+        if self.version >= 4 {
+            u32s(&mut out, &self.blocked);
+        }
+        out
+    }
+
+    pub fn build(&self) -> Vec<u8> {
+        let mut out = self.header();
+        for o in &self.objects {
+            out.extend(o);
+        }
+        out.extend(self.count.unwrap_or(self.objects.len() as u32).to_le_bytes());
+        out
+    }
 }

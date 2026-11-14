@@ -62,11 +62,14 @@ crates/arcanum_vfs/              game data access, no Bevy dependency
   src/test_util.rs               DatBuilder: writes synthetic .dat files (feature "test-util")
 crates/arcanum_formats/          file format decoders, no Bevy dependency
   src/mes.rs                     MesFile: {id}{text} message files
-  src/object.rs                  Object (prototype/instance), PlayerFile (.mpc); PC field tables
+  src/object.rs                  Object (prototype/instance, all 18 types), PlayerFile (.mpc), type numbers
+  src/sector.rs                  Sector (.sec): lights, tiles, roofs, scripts, blocking mask, objects
+  src/object_fields.rs           field tables per block (generated: tools/object_probe/gen_rust_fields.py)
   src/cp1252.rs                  Windows-1252 decode/encode (shared by .mes and fonts)
   src/font.rs                    BitmapFont: glyph lookup, measure, render to a coverage mask
   src/art.rs                     ArtFile: sprites (format notes at top of file)
-  src/test_util.rs               ArtBuilder, TestFrame, rle_encode, font_art (feature "test-util")
+  src/test_util.rs               ArtBuilder, TestFrame, rle_encode, font_art, ObjectBuilder,
+                                 SectorBuilder (feature "test-util")
   tests/real_files.rs            parses every .mes/.art in the real archives (skips without data)
 crates/arcanum_client/           the Bevy game
   src/main.rs                    app setup; DEBUG_ARCANUM_SCREENSHOT handling
@@ -161,8 +164,64 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   `mes/options_ui.mes`; values in `OptionsOffOn/OptionsWalk/OptionsFloats.mes`
   (`OptionsDifficulty`/`OptionsCombatMode` exist but are unused by design). The original had
   no Cancel: changes apply live. Layout constants are in `options.rs` (original pixels).
-- Not yet investigated: the engine's 5-rotation mirrored-sprite optimisation, art id → file name
-  mapping (`interface.mes`, `item_inven.mes` etc. look like the indexes), fonts
+- **Sectors (`maps/<map>/<sector id>.sec`)** (verified: all 1680 `.sec` in `Arcanum.dat` parse
+  to the exact byte; layout table in `sector.rs`). Loader at 0x4d1a40 (from the sector cache
+  `FUN_004d0540`; name `"%s\%I64u.sec"` at 0x5b7e6c). Order: `u32 light_count` + 48-byte lights
+  (0x4f72c0, 0x4ddd20) · 4096 `u32` tile art ids, row-major (0x4f7c30) · `u32 roof_empty_flag`, then
+  256 `u32` roofs only if it is 0 (0x4f8020) · `u32 version` 0x00AA0000+0..4 (0x4d1eb1) · v>=1: `u32 n`
+  + n x 24-byte tile scripts (0x4f65b0) · v>=2: 12-byte sector script header (0x4f6250) · v>=3:
+  town map info, aptitude adjustment, light scheme (3 x u32), sound list (3 x u32, 0x4f8150) · v>=4:
+  512-byte tile blocking mask (0x4f8250) · the objects back to back with **no lengths** · `u32
+  object_count`. The engine (`FUN_004f1350`) reads the count from EOF-4 first, then walks that many
+  objects field by field, then checks the repeated count. Versions in the data: v4 1473, v3 169,
+  v0 18, v2 6, v1 2. Sectors hold only walls, portals, scenery and traps (Arcanum.dat: 89,013 /
+  2,107 / 170,719 / 2,063); containers, items and NPCs are `G_<guid>.mob` files in the map folder,
+  one instance object each (12,723). How the map loader assigns `.mob` files to sectors is not
+  reversed. `Arcanum.PATCH0` contains no `.sec`.
+  Tile `u32` (type 0): art type bits 28-31 (0 tile, 0xB facade), terrain 1 bits 22-27, terrain 2
+  bits 16-21 (`art/tile/tilename.mes`), edge 12-15, variation 9-11, flags 6-8, flip bit 0
+  (accessors 0x5036b0..0x503990, 0x504fd0). Facade ids (0xB) use other bits (0x504a60..0x504ad0);
+  only the facade number is decoded (see "Art ids" below). **Unverified**: blocking-mask bit order (read as bit i%32 of word i/32 for tile i),
+  light field meanings, sound list meaning, the tile flag bits.
+- **Objects (instances), all 18 types** (verified: every object in all 1680 `.sec` and all
+  12,723 `.mob` in `Arcanum.dat` parses to the exact byte; layout table in `object.rs`). Reader
+  `FUN_00406600` (0x406600): `u32 version` 0x77 · prototype ObjectID (24) · then, for kind != -1,
+  `FUN_00409aa0` (0x409aa0): ObjectID (24) · `u32 type` · `u16 count` · `W` × u32 bitmap ·
+  values of set bits in bit order. Types (engine numbers): 0 wall, 1 portal, 2 container,
+  3 scenery, 4 projectile, 5 weapon, 6 ammo, 7 armor, 8 gold, 9 food, 10 scroll, 11 key,
+  12 key ring, 13 written, 14 generic, 15 pc, 16 npc, 17 trap. Blocks: common + own block
+  (0-4, 17), common + item + subtype (5-14), common + critter + pc/npc (15, 16).
+  **Bitmap block rule** (`FUN_0040c030` 0x40c030, ranges `FUN_0040cba0` 0x40cba0): common starts
+  at bit 0; each next block at the next 32-bit boundary after the previous block's last field
+  (common 36 fields -> 64; item 23 -> 96; critter 33 -> 128). Words W = word of the last field
+  + 1: 3 for 0-4 and 17, 4 for items, 5 for critters. This corrects the earlier "grouped by 64".
+  Storage kinds come from the engine's static field table (`FUN_0040a8a0`..0x40b8d5, read by
+  `FUN_004e44f0` 0x4e44f0): kind 3 i32; 4 i64 (`u8 present` + 8); 12 ObjectID (`u8 present` +
+  24); 11 string; 5-10, 13 sparse array (`FUN_004e78f0`; element size is stored, 4/8/12/24
+  seen). Exceptions to the name-based rules: `scenery_whos_in_me`, `projectile_parent_weapon`,
+  `item_parent`, `npc_leader`, `npc_combat_focus`, `npc_who_hit_me_last`,
+  `npc_substitute_inventory` are object ids; `npc_standpoint_day/night` are i64. The tables are
+  generated by `tools/object_probe/gen_rust_fields.py` from the field names and
+  `tools/object_probe/ftypes.json` (kind per field index). Projectile (4) and pc (15) never
+  occur in sector or `.mob` data; projectile is covered only by synthetic tests. Prototypes of
+  types other than pc are not read yet (`UnsupportedType`).
+- **Art ids → `.art` paths** (`crates/arcanum_formats/src/art_id.rs`; all rules, bit layouts and
+  Arcanum.exe addresses are in its top doc comment). Verified over the 621 start-map sectors: 2.54 M
+  tile ids, 28,064 walls, 1,588 portals, 117,385 scenery, 1,012 lights, 6,483 roofs all resolve to
+  files that exist. Not covered: one scenery object with `current_aid` 0xFFFFFFFF (no art) and
+  3,799 of 121,185 scenery objects with no instance `current_aid` (prototype fallback, see
+  "Known issues"). Type = `id >> 28`
+  (0x502700): 0 tile, 1 wall, 3 portal, 4 scenery, 9 light, 0xA roof, 0xB facade (sector "tiles"
+  of type 0xB); critter 2, item 6, container 7, monster 0xC, unique npc 0xD, interface 5 and eye
+  candy 0xE are not decoded. Index files (`ART_INDEX_FILES`): `art/tile/tilename.mes` (four lists
+  by key range 0/100/200/300: outdoor/indoor x flippable/fixed), `art/wall/structure.mes`,
+  `art/portal/portal.mes`, `art/scenery/scenery.mes` (key = category * 1000 + number),
+  `art/facade/facadename.mes`, `art/roof/roofname.mes`, `art/light/light.mes`. Tile file name:
+  `<n1><n2><edge letter><var letter>.art` or `<n>bse...`; **flipped tiles (bit 0) use the stored edge
+  unchanged** although the engine accessor 0x503700 remaps it (remapping gives missing files; not
+  traced why). Facade ids use bits 17..24 (+0x100 from bit 27) as the `facadename.mes` position.
+  Portal bit 9 turns the `U` in `...U0.ART` into `D`. Open: facade sub-fields, item/critter paths.
+- Not yet investigated: the engine's 5-rotation mirrored-sprite optimisation, item/critter/monster/container/interface art id paths, fonts
   (`art/morph15font.art` and similar), sound formats, `.dlg`, `scr/` scripts, maps (`terrain/`,
   `modules/`), save games.
 
@@ -219,7 +278,7 @@ Owner's decision: build it properly (option a), in three steps, each its own PR:
    from the engine names; real-data tests parse all 13 PC prototypes and all 12 `.mpc` to the last
    byte and check names, backgrounds, story ids, portraits, race and gender. The VFS now mounts
    `<ARCANUM_DIR>/data` (loose `proto/`, `Players/`) between the module and the base archives.
-   Next object types (NPC, items, ...) need their field blocks and any storage-kind corrections.
+   Instances of all 18 object types are read now (see "Format knowledge", objects).
 3. **Fill the picker screen**: done except the stats. `premade.rs` loads the 12 pre-mades
    (prototypes 16087-16098) through the VFS; `new_game.rs` shows, as the original does (draw
    code 0x5458d0 + 0x5448e0, mode flag 0x64c458 = 0 for the picker): bar 1 the name (field
@@ -264,7 +323,8 @@ What is known so far:
   - ObjectID (24 bytes) = `u16 kind` (-1 none, 1 prototype, 2 GUID) · `u16 pad` · `u32 pad` ·
     16-byte payload (prototype number in the first u32, or the GUID). Pre-mades point at
     prototypes 16087-16098; their GUIDs match the file names.
-  - Bitmap bits are grouped by 64: 0-63 common object fields, 64-127 critter, 128-191 PC.
+  - Bitmap bits: 0-35 common object fields, 64-96 critter, 128-152 PC. (Not "grouped by 64":
+    each block starts at the next 32-bit boundary; see "Format knowledge", objects.)
   - Value encodings: `i32` = 4 bytes. `i64` = `u8 present` + 8 bytes if present. Sizeable array
     = `u8 present`; if present `u32 elem_size` · `u32 count` · `u32 array_id` · `count * elem_size`
     bytes · bitset (`u32 n` then `n` × u32). Strings (in the trailer) = `u32 len` incl. the NUL ·
@@ -312,6 +372,14 @@ What is known so far:
 
 ## Known issues / backlog (not started)
 
+- Sector objects: instance fields fall back to the prototype when the instance bitmap omits them
+  (3,799 of 121,185 start-map scenery objects have no `current_aid`). `Object::parse_prototype`
+  only supports pc. Wall, portal and scenery prototype parsing is needed before the art step
+  (so every object resolves art) and the blocking step (prototype flags).
+- Blocking: `Sector::blocked` is only the tile blocking mask (`None` for version < 4: 32 of 621
+  start-map sectors; sparse: 172 of 621 set any bit, the start sector none). Objects (walls,
+  scenery, closed portals) block as well and are not decoded for blocking yet.
+
 - Sprites use linear filtering, so scaled 800x600 art looks soft. Consider nearest or a scaler.
 - Windows narrower than 4:3 crop the menu art (they are rejected by resolution validation anyway).
 - Label positions in `main_menu.rs` are hand-tuned constants for the original art.
@@ -338,12 +406,11 @@ What is known so far:
    reader, then the screen), then character creation. Then menu keyboard hotkeys
    (`MainMenu.mes` 20-24, 60-64).
 3. Credits screen (needs multi-line text).
-4. Art id → path mapping via the `.mes` index files, so assets can be loaded by game id.
-5. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
-6. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the
+4. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
+5. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the
    `.art`, so new art and upscales can drop in. Plus a coverage report of replaced assets.
-7. Steam install auto-detection (libraryfolders.vdf) as the default `ARCANUM_DIR`.
-8. Later: maps/tiles, critters, dialogue, scripts, saves.
+6. Steam install auto-detection (libraryfolders.vdf) as the default `ARCANUM_DIR`.
+7. Later: maps/tiles, critters, dialogue, scripts, saves.
 
 ## Art pipeline (outside the repo)
 
