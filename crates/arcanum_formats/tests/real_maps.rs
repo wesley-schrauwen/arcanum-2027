@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use arcanum_formats::map::{MAP_LIST, MapProperties, TileLoc, parse_map_list, start_map};
 use arcanum_formats::mes::MesFile;
 use arcanum_formats::object::Object;
+use arcanum_formats::sector::Sector;
 use arcanum_vfs::{ArcanumArchive, Vfs};
 
 /// `ARCANUM_DIR`, or `assets/Arcanum` at the workspace root.
@@ -148,4 +149,68 @@ fn every_mob_object_parses() {
     ];
     assert_eq!(by_name(&counts), BTreeMap::from(expected));
     assert_eq!(files.len(), 12_723);
+}
+
+/// Adds `sector`'s objects to `counts` by type.
+fn count_types(sector: &Sector, counts: &mut BTreeMap<u32, usize>) {
+    for o in &sector.objects {
+        *counts.entry(o.object_type).or_insert(0) += 1;
+    }
+}
+
+#[test]
+fn start_sector_parses_to_the_byte() {
+    let Some(vfs) = vfs() else { return };
+    let data = vfs.read("maps/Arcanum1-024-fixed/86570436012.sec").unwrap();
+    assert_eq!(data.len(), 47291);
+    let sector = Sector::parse(&data).unwrap();
+    assert!(!sector.objects.is_empty());
+    eprintln!("start sector: version {}, {} lights, {} objects", sector.version, sector.lights.len(), sector.objects.len());
+}
+
+/// Every object in all 621 start-map sectors parses (through the VFS, so with the patch).
+#[test]
+fn start_map_sector_objects_parse() {
+    let Some(vfs) = vfs() else { return };
+    let files: Vec<String> =
+        vfs.list_dir("maps/Arcanum1-024-fixed").unwrap().into_iter().filter(|p| p.to_ascii_lowercase().ends_with(".sec")).collect();
+    assert_eq!(files.len(), 621);
+    let mut counts = BTreeMap::new();
+    for path in &files {
+        let sector = Sector::parse(&vfs.read(path).unwrap()).unwrap_or_else(|e| panic!("{path}: {e}"));
+        count_types(&sector, &mut counts);
+    }
+    eprintln!("start map sector objects: {:?}", by_name(&counts));
+    assert!(counts.keys().all(|t| [0, 1, 3, 17].contains(t)), "only walls, portals, scenery and traps: {counts:?}");
+}
+
+/// Every `.sec` of every map in `Arcanum.dat` parses to the exact byte, and every one in
+/// `Arcanum.PATCH0` if present.
+#[test]
+fn every_sector_of_every_map_parses() {
+    let Some(archive) = module_archive() else { return };
+    let check = |archive: &ArcanumArchive| {
+        let files = map_files(archive, ".sec");
+        let mut counts = BTreeMap::new();
+        let mut failures = Vec::new();
+        for path in &files {
+            match Sector::parse(&archive.read(path).unwrap()) {
+                Ok(sector) => count_types(&sector, &mut counts),
+                Err(e) => failures.push(format!("{path}: {e}")),
+            }
+        }
+        assert!(failures.is_empty(), "{} failed, first: {:?}", failures.len(), &failures[..failures.len().min(5)]);
+        (files.len(), counts)
+    };
+    let (files, counts) = check(&archive);
+    eprintln!("Arcanum.dat: {files} sectors, objects {:?}", by_name(&counts));
+    // 1680 files: the research walk saw 1668 (its extraction missed `Castle S'nel N'fa` and
+    // `Roseborough Inn2`, 6 sectors each).
+    assert_eq!(files, 1680);
+    assert_eq!(by_name(&counts), BTreeMap::from([("portal", 2107), ("scenery", 170_719), ("trap", 2063), ("wall", 89_013)]));
+    let patch = game_dir().join("modules/Arcanum.PATCH0");
+    if patch.is_file() {
+        let (files, counts) = check(&ArcanumArchive::open(patch).unwrap());
+        eprintln!("Arcanum.PATCH0: {files} sectors, objects {:?}", by_name(&counts));
+    }
 }

@@ -63,11 +63,13 @@ crates/arcanum_vfs/              game data access, no Bevy dependency
 crates/arcanum_formats/          file format decoders, no Bevy dependency
   src/mes.rs                     MesFile: {id}{text} message files
   src/object.rs                  Object (prototype/instance, all 18 types), PlayerFile (.mpc), type numbers
+  src/sector.rs                  Sector (.sec): lights, tiles, roofs, scripts, blocking mask, objects
   src/object_fields.rs           field tables per block (generated: tools/object_probe/gen_rust_fields.py)
   src/cp1252.rs                  Windows-1252 decode/encode (shared by .mes and fonts)
   src/font.rs                    BitmapFont: glyph lookup, measure, render to a coverage mask
   src/art.rs                     ArtFile: sprites (format notes at top of file)
-  src/test_util.rs               ArtBuilder, TestFrame, rle_encode, font_art (feature "test-util")
+  src/test_util.rs               ArtBuilder, TestFrame, rle_encode, font_art, ObjectBuilder,
+                                 SectorBuilder (feature "test-util")
   tests/real_files.rs            parses every .mes/.art in the real archives (skips without data)
 crates/arcanum_client/           the Bevy game
   src/main.rs                    app setup; DEBUG_ARCANUM_SCREENSHOT handling
@@ -162,6 +164,25 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   `mes/options_ui.mes`; values in `OptionsOffOn/OptionsWalk/OptionsFloats.mes`
   (`OptionsDifficulty`/`OptionsCombatMode` exist but are unused by design). The original had
   no Cancel: changes apply live. Layout constants are in `options.rs` (original pixels).
+- **Sectors (`maps/<map>/<sector id>.sec`)** (verified: all 1680 `.sec` in `Arcanum.dat` parse
+  to the exact byte; layout table in `sector.rs`). Loader at 0x4d1a40 (from the sector cache
+  `FUN_004d0540`; name `"%s\%I64u.sec"` at 0x5b7e6c). Order: `u32 light_count` + 48-byte lights
+  (0x4f72c0, 0x4ddd20) · 4096 `u32` tile art ids, row-major (0x4f7c30) · `u32 roof_empty_flag`, then
+  256 `u32` roofs only if it is 0 (0x4f8020) · `u32 version` 0x00AA0000+0..4 (0x4d1eb1) · v>=1: `u32 n`
+  + n x 24-byte tile scripts (0x4f65b0) · v>=2: 12-byte sector script header (0x4f6250) · v>=3:
+  town map info, aptitude adjustment, light scheme (3 x u32), sound list (3 x u32, 0x4f8150) · v>=4:
+  512-byte tile blocking mask (0x4f8250) · the objects back to back with **no lengths** · `u32
+  object_count`. The engine (`FUN_004f1350`) reads the count from EOF-4 first, then walks that many
+  objects field by field, then checks the repeated count. Versions in the data: v4 1473, v3 169,
+  v0 18, v2 6, v1 2. Sectors hold only walls, portals, scenery and traps (Arcanum.dat: 89,013 /
+  2,107 / 170,719 / 2,063); containers, items and NPCs are `G_<guid>.mob` files in the map folder,
+  one instance object each (12,723). How the map loader assigns `.mob` files to sectors is not
+  reversed. `Arcanum.PATCH0` contains no `.sec`.
+  Tile `u32` (type 0): art type bits 28-31 (0 tile, 0xB facade), terrain 1 bits 22-27, terrain 2
+  bits 16-21 (`art/tile/tilename.mes`), edge 12-15, variation 9-11, flags 6-8, flip bit 0
+  (accessors 0x5036b0..0x503990, 0x504fd0). Facade ids (0xB) use other bits (0x504a60..0x504ad0),
+  not decoded. **Unverified**: blocking-mask bit order (read as bit i%32 of word i/32 for tile i),
+  light field meanings, sound list meaning, the tile flag bits.
 - **Objects (instances), all 18 types** (verified: every object in all 1668 `.sec` and all
   12,723 `.mob` in `Arcanum.dat` parses to the exact byte; layout table in `object.rs`). Reader
   `FUN_00406600` (0x406600): `u32 version` 0x77 · prototype ObjectID (24) · then, for kind != -1,

@@ -1,6 +1,7 @@
 //! Builds synthetic `.art`, object and sector files so tests do not depend on the game data.
 
 use crate::object::{self, Array, ObjectId, Storage, Value};
+use crate::sector::{self, Light, ScriptHeader, TileScript};
 
 /// One stored frame: its header fields and the bytes exactly as they appear in the file.
 #[derive(Clone, Debug)]
@@ -272,6 +273,117 @@ impl ObjectBuilder {
         for (_, v) in values {
             out.extend(v);
         }
+        out
+    }
+}
+
+/// Writes `.sec` files in the layout `Sector::parse` reads.
+#[derive(Clone, Debug)]
+pub struct SectorBuilder {
+    pub lights: Vec<Light>,
+    /// 4096 tile art ids, row-major.
+    pub tiles: Vec<u32>,
+    /// 256 roof art ids, or `None` to write the "no roofs" flag.
+    pub roofs: Option<Vec<u32>>,
+    /// 0..=4; selects which blocks are written.
+    pub version: u32,
+    /// Overrides the version word (`0x00AA0000 + version`), for malformed files.
+    pub version_word: Option<u32>,
+    pub tile_scripts: Vec<TileScript>,
+    pub script: ScriptHeader,
+    pub townmap_info: u32,
+    pub aptitude_adjustment: i32,
+    pub light_scheme: u32,
+    pub sound_list: [u32; 3],
+    /// 128 words.
+    pub blocked: Vec<u32>,
+    /// Encoded objects (see [`ObjectBuilder`]).
+    pub objects: Vec<Vec<u8>>,
+    /// Overrides both object counts (default: `objects.len()`).
+    pub count: Option<u32>,
+}
+
+impl Default for SectorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SectorBuilder {
+    /// A version 4 sector: no lights, zero tiles, no roofs, no scripts, nothing blocked, no objects.
+    pub fn new() -> Self {
+        Self {
+            lights: Vec::new(),
+            tiles: vec![0; sector::TILE_COUNT],
+            roofs: None,
+            version: sector::MAX_VERSION,
+            version_word: None,
+            tile_scripts: Vec::new(),
+            script: ScriptHeader::default(),
+            townmap_info: 0,
+            aptitude_adjustment: 0,
+            light_scheme: 0,
+            sound_list: [0; 3],
+            blocked: vec![0; sector::BLOCKED_WORDS],
+            objects: Vec::new(),
+            count: None,
+        }
+    }
+
+    /// Where the first object starts in [`build`](Self::build)'s output.
+    pub fn objects_offset(&self) -> usize {
+        self.header().len()
+    }
+
+    /// Everything before the objects.
+    fn header(&self) -> Vec<u8> {
+        assert_eq!(self.tiles.len(), sector::TILE_COUNT);
+        assert_eq!(self.blocked.len(), sector::BLOCKED_WORDS);
+        let mut out = Vec::new();
+        let u32s = |out: &mut Vec<u8>, vals: &[u32]| out.extend(vals.iter().flat_map(|v| v.to_le_bytes()));
+        u32s(&mut out, &[self.lights.len() as u32]);
+        for l in &self.lights {
+            let start = out.len();
+            out.extend(l.handle.to_le_bytes());
+            u32s(&mut out, &[l.x as u32, l.y as u32, l.offset_x as u32, l.offset_y as u32, l.flags, l.art_id]);
+            out.extend(l.color);
+            out.resize(start + sector::LIGHT_SIZE, 0);
+        }
+        u32s(&mut out, &self.tiles);
+        match &self.roofs {
+            Some(r) => {
+                assert_eq!(r.len(), sector::ROOF_COUNT);
+                u32s(&mut out, &[0]);
+                u32s(&mut out, r);
+            }
+            None => u32s(&mut out, &[1]),
+        }
+        u32s(&mut out, &[self.version_word.unwrap_or(sector::VERSION_BASE + self.version)]);
+        if self.version >= 1 {
+            u32s(&mut out, &[self.tile_scripts.len() as u32]);
+            for t in &self.tile_scripts {
+                u32s(&mut out, &[t.node_flags, t.tile, t.script.flags, t.script.counters, t.script.number, 0xdead_beef]);
+            }
+        }
+        if self.version >= 2 {
+            u32s(&mut out, &[self.script.flags, self.script.counters, self.script.number]);
+        }
+        if self.version >= 3 {
+            u32s(&mut out, &[self.townmap_info, self.aptitude_adjustment as u32, self.light_scheme]);
+            u32s(&mut out, &self.sound_list);
+        }
+        if self.version >= 4 {
+            u32s(&mut out, &self.blocked);
+        }
+        out
+    }
+
+    pub fn build(&self) -> Vec<u8> {
+        let mut out = self.header();
+        for o in &self.objects {
+            out.extend(o);
+        }
+        out.extend(self.count.unwrap_or(self.objects.len() as u32).to_le_bytes());
         out
     }
 }
