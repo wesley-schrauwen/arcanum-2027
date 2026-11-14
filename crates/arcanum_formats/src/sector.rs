@@ -32,6 +32,7 @@
 
 use std::fmt;
 
+use crate::art_id::ArtId;
 use crate::map::SECTOR_TILES;
 use crate::object::{Object, ObjectError};
 
@@ -94,6 +95,11 @@ impl Tile {
         self.0 >> 28
     }
 
+    /// This tile as an [`ArtId`], for [`ArtIndex::path`](crate::art_id::ArtIndex::path).
+    pub fn art_id(self) -> ArtId {
+        ArtId(self.0)
+    }
+
     pub fn is_facade(self) -> bool {
         self.art_type() == Self::ART_TYPE_FACADE
     }
@@ -123,7 +129,7 @@ impl Tile {
         (self.0 >> 6) & 0x7
     }
 
-    /// Bit 0, the flip bit (0x504fd0); 0 in all shipped tiles.
+    /// Bit 0, the flip bit (0x504fd0). Set in many transition tiles; the file name ignores it (see `art_id`).
     pub fn is_flipped(self) -> bool {
         self.0 & 1 == 1
     }
@@ -450,7 +456,7 @@ mod tests {
         let s = Sector::parse(&data).unwrap();
         let types: Vec<_> = s.objects.iter().map(|o| o.object_type).collect();
         assert_eq!(types, [TYPE_WALL, TYPE_SCENERY, TYPE_PORTAL]);
-        assert_eq!(s.objects[0].art_id(), Some(10));
+        assert_eq!(s.objects[0].art_id(), Some(ArtId(10)));
         assert_eq!(s.objects[1].field("location"), Some(&Value::Int64(Some(99))));
         assert_eq!(s.objects[2].int("portal_flags"), Some(2));
     }

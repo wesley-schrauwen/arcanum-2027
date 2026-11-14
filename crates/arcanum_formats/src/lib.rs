@@ -1,4 +1,5 @@
 pub mod art;
+pub mod art_id;
 pub mod cp1252;
 pub mod font;
 pub mod map;

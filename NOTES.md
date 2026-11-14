@@ -180,8 +180,8 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   reversed. `Arcanum.PATCH0` contains no `.sec`.
   Tile `u32` (type 0): art type bits 28-31 (0 tile, 0xB facade), terrain 1 bits 22-27, terrain 2
   bits 16-21 (`art/tile/tilename.mes`), edge 12-15, variation 9-11, flags 6-8, flip bit 0
-  (accessors 0x5036b0..0x503990, 0x504fd0). Facade ids (0xB) use other bits (0x504a60..0x504ad0),
-  not decoded. **Unverified**: blocking-mask bit order (read as bit i%32 of word i/32 for tile i),
+  (accessors 0x5036b0..0x503990, 0x504fd0). Facade ids (0xB) use other bits (0x504a60..0x504ad0);
+  only the facade number is decoded (see "Art ids" below). **Unverified**: blocking-mask bit order (read as bit i%32 of word i/32 for tile i),
   light field meanings, sound list meaning, the tile flag bits.
 - **Objects (instances), all 18 types** (verified: every object in all 1668 `.sec` and all
   12,723 `.mob` in `Arcanum.dat` parses to the exact byte; layout table in `object.rs`). Reader
@@ -205,8 +205,21 @@ Recovered by inspecting data and by reverse engineering `Arcanum.exe` with the R
   `tools/object_probe/ftypes.json` (kind per field index). Projectile (4) and pc (15) never
   occur in sector or `.mob` data; projectile is covered only by synthetic tests. Prototypes of
   types other than pc are not read yet (`UnsupportedType`).
-- Not yet investigated: the engine's 5-rotation mirrored-sprite optimisation, art id → file name
-  mapping (`interface.mes`, `item_inven.mes` etc. look like the indexes), fonts
+- **Art ids → `.art` paths** (`crates/arcanum_formats/src/art_id.rs`; all rules, bit layouts and
+  Arcanum.exe addresses are in its top doc comment). Verified over the 621 start-map sectors: 2.54 M
+  tile ids, 28,064 walls, 1,588 portals, 117,385 scenery, 1,012 lights, 6,483 roofs all resolve to
+  files that exist (one scenery object has `current_aid` 0xFFFFFFFF = no art). Type = `id >> 28`
+  (0x502700): 0 tile, 1 wall, 3 portal, 4 scenery, 9 light, 0xA roof, 0xB facade (sector "tiles"
+  of type 0xB); critter 2, item 6, container 7, monster 0xC, unique npc 0xD, interface 5 and eye
+  candy 0xE are not decoded. Index files (`ART_INDEX_FILES`): `art/tile/tilename.mes` (four lists
+  by key range 0/100/200/300: outdoor/indoor x flippable/fixed), `art/wall/structure.mes`,
+  `art/portal/portal.mes`, `art/scenery/scenery.mes` (key = category * 1000 + number),
+  `art/facade/facadename.mes`, `art/roof/roofname.mes`, `art/light/light.mes`. Tile file name:
+  `<n1><n2><edge letter><var letter>.art` or `<n>bse...`; **flipped tiles (bit 0) use the stored edge
+  unchanged** although the engine accessor 0x503700 remaps it (remapping gives missing files; not
+  traced why). Facade ids use bits 17..24 (+0x100 from bit 27) as the `facadename.mes` position.
+  Portal bit 9 turns the `U` in `...U0.ART` into `D`. Open: facade sub-fields, item/critter paths.
+- Not yet investigated: the engine's 5-rotation mirrored-sprite optimisation, item/critter/monster/container/interface art id paths, fonts
   (`art/morph15font.art` and similar), sound formats, `.dlg`, `scr/` scripts, maps (`terrain/`,
   `modules/`), save games.
 
@@ -383,12 +396,11 @@ What is known so far:
    reader, then the screen), then character creation. Then menu keyboard hotkeys
    (`MainMenu.mes` 20-24, 60-64).
 3. Credits screen (needs multi-line text).
-4. Art id → path mapping via the `.mes` index files, so assets can be loaded by game id.
-5. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
-6. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the
+4. `.art` animation playback (frame rate, rotations, center/delta offsets) as a Bevy component.
+5. Replacement-art layer: a PNG next to an asset path (e.g. `mainmenuback.png`) overrides the
    `.art`, so new art and upscales can drop in. Plus a coverage report of replaced assets.
-7. Steam install auto-detection (libraryfolders.vdf) as the default `ARCANUM_DIR`.
-8. Later: maps/tiles, critters, dialogue, scripts, saves.
+6. Steam install auto-detection (libraryfolders.vdf) as the default `ARCANUM_DIR`.
+7. Later: maps/tiles, critters, dialogue, scripts, saves.
 
 ## Art pipeline (outside the repo)
 

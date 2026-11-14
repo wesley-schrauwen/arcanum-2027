@@ -1,8 +1,9 @@
 //! Runs against the real game data; skipped when `assets/` is absent.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use arcanum_formats::map::{MAP_LIST, MapProperties, TileLoc, parse_map_list, start_map};
+use arcanum_formats::art_id::{ArtId, ArtIndex};
+use arcanum_formats::map::{MAP_LIST, MapProperties, SectorId, TileLoc, parse_map_list, start_map};
 use arcanum_formats::mes::MesFile;
 use arcanum_formats::object::Object;
 use arcanum_formats::sector::Sector;
@@ -213,4 +214,105 @@ fn every_sector_of_every_map_parses() {
         let (files, counts) = check(&ArcanumArchive::open(patch).unwrap());
         eprintln!("Arcanum.PATCH0: {files} sectors, objects {:?}", by_name(&counts));
     }
+}
+
+fn art_index(vfs: &Vfs) -> ArtIndex {
+    ArtIndex::load(|p| vfs.read(p).ok()).unwrap_or_else(|e| panic!("art index: {e}"))
+}
+
+/// Resolution outcome counts per art kind name.
+#[derive(Default)]
+struct ArtStats {
+    resolved: usize,
+    /// `0xFFFFFFFF`.
+    no_art: usize,
+    /// The index has no path for the id.
+    unresolved: BTreeMap<u32, usize>,
+    /// The path does not exist in the VFS.
+    missing: BTreeMap<String, usize>,
+}
+
+fn check_art(vfs: &Vfs, index: &ArtIndex, cache: &mut HashMap<u32, Option<String>>, stats: &mut BTreeMap<String, ArtStats>, id: ArtId) {
+    let s = stats.entry(format!("{:?}", id.kind())).or_default();
+    if id.is_none() {
+        s.no_art += 1;
+        return;
+    }
+    let path = cache.entry(id.0).or_insert_with(|| index.path(id));
+    match path {
+        None => *s.unresolved.entry(id.0).or_insert(0) += 1,
+        Some(p) if vfs.exists(p) => s.resolved += 1,
+        Some(p) => *s.missing.entry(p.clone()).or_insert(0) += 1,
+    }
+}
+
+/// Checks every tile, roof, light and object art id of `sectors`; returns the stats per kind.
+fn art_stats(vfs: &Vfs, sectors: &[String]) -> BTreeMap<String, ArtStats> {
+    let index = art_index(vfs);
+    let (mut cache, mut stats) = (HashMap::new(), BTreeMap::new());
+    for path in sectors {
+        let sector = Sector::parse(&vfs.read(path).unwrap()).unwrap_or_else(|e| panic!("{path}: {e}"));
+        for t in sector.tiles.iter() {
+            check_art(vfs, &index, &mut cache, &mut stats, t.art_id());
+        }
+        // Roof ids of 0xFFFFFFFF are empty cells, not missing art.
+        for r in sector.roofs.iter().flat_map(|r| r.iter()).filter(|r| **r != ArtId::NONE.0) {
+            check_art(vfs, &index, &mut cache, &mut stats, ArtId(*r));
+        }
+        for l in &sector.lights {
+            check_art(vfs, &index, &mut cache, &mut stats, ArtId(l.art_id));
+        }
+        // Traps store no art id.
+        for id in sector.objects.iter().filter(|o| o.object_type != 17).filter_map(Object::art_id) {
+            check_art(vfs, &index, &mut cache, &mut stats, id);
+        }
+    }
+    stats
+}
+
+fn report(label: &str, stats: &BTreeMap<String, ArtStats>) -> usize {
+    let mut bad = 0;
+    for (kind, s) in stats {
+        let (u, m): (usize, usize) = (s.unresolved.values().sum(), s.missing.values().sum());
+        eprintln!("{label} {kind}: resolved {}, no art {}, unresolved {u}, missing file {m}", s.resolved, s.no_art);
+        bad += u + m;
+        for (id, n) in s.unresolved.iter().take(5) {
+            eprintln!("   unresolved {id:#010x} x{n}");
+        }
+        for (p, n) in s.missing.iter().take(5) {
+            eprintln!("   missing {p} x{n}");
+        }
+    }
+    bad
+}
+
+/// The 3x3 sectors around the start sector: every art id resolves to a file that exists.
+#[test]
+fn start_area_art_resolves() {
+    let Some(vfs) = vfs() else { return };
+    let centre = SectorId(86_570_436_012);
+    let mut sectors = Vec::new();
+    for dy in -1i64..=1 {
+        for dx in -1i64..=1 {
+            let id = SectorId::new((centre.x() as i64 + dx) as u32, (centre.y() as i64 + dy) as u32);
+            sectors.push(format!("maps/Arcanum1-024-fixed/{}", id.file_name()));
+        }
+    }
+    let stats = art_stats(&vfs, &sectors);
+    assert_eq!(report("start area", &stats), 0);
+    assert!(stats["Tile"].resolved > 0 && stats["Facade"].resolved > 0 && stats["Scenery"].resolved > 0);
+}
+
+/// All 621 sectors. Observed: 0 unresolved and 0 missing; the only id without art is one scenery
+/// object with `current_aid = 0xFFFFFFFF`.
+#[test]
+fn start_map_art_coverage() {
+    let Some(vfs) = vfs() else { return };
+    let sectors: Vec<String> =
+        vfs.list_dir("maps/Arcanum1-024-fixed").unwrap().into_iter().filter(|p| p.to_ascii_lowercase().ends_with(".sec")).collect();
+    assert_eq!(sectors.len(), 621);
+    let stats = art_stats(&vfs, &sectors);
+    assert_eq!(report("start map", &stats), 0);
+    assert_eq!(stats["Tile"].resolved + stats["Facade"].resolved, 621 * 4096);
+    assert_eq!(stats.values().map(|s| s.no_art).sum::<usize>(), 1);
 }

@@ -31,6 +31,7 @@
 
 use std::fmt;
 
+use crate::art_id::ArtId;
 use crate::cp1252;
 pub use crate::object_fields::*;
 
@@ -317,8 +318,8 @@ impl Object {
     }
 
     /// The current art id (`current_aid`), if stored.
-    pub fn art_id(&self) -> Option<u32> {
-        self.int("current_aid").map(|v| v as u32)
+    pub fn art_id(&self) -> Option<ArtId> {
+        self.int("current_aid").map(|v| ArtId(v as u32))
     }
 
     pub fn field(&self, name: &str) -> Option<&Value> {
@@ -686,7 +687,7 @@ mod tests {
         assert_eq!(obj.object_type, TYPE_WALL);
         assert_eq!(obj.prototype.prototype(), Some(1012));
         assert_eq!(obj.bitmap, vec![3, 0, 1]);
-        assert_eq!(obj.art_id(), Some(0x2000_1234));
+        assert_eq!(obj.art_id(), Some(ArtId(0x2000_1234)));
         assert_eq!(obj.field("location"), Some(&Value::Int64(Some((5 << 32) | 7))));
         assert_eq!(obj.int("wall_flags"), Some(0x40));
         assert_eq!(obj.fields.len(), 3);
@@ -767,7 +768,7 @@ mod tests {
         let both = [first.clone(), second.clone()].concat();
         let (a, used) = Object::parse_instance_prefix(&both).unwrap();
         assert_eq!(used, first.len());
-        assert_eq!(a.art_id(), Some(77));
+        assert_eq!(a.art_id(), Some(ArtId(77)));
         let (b, used2) = Object::parse_instance_prefix(&both[used..]).unwrap();
         assert_eq!((b.object_type, used2), (TYPE_TRAP, second.len()));
         assert_eq!(b.art_id(), None);
